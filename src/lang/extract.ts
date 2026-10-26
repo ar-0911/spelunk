@@ -7,6 +7,8 @@ export interface TreeFacts {
   imports: Omit<ImportRef, "targets">[];
   calls: string[];
   callSites: [string, number][];
+  /** Lines covered by calls that register a route ("/path" as first argument). */
+  spans: [number, number][];
   swallowed: Located[];
   doc?: string;
   parseErrors: number;
@@ -49,6 +51,25 @@ function lastSegment(text: string): string | undefined {
   const seg = text.split(/[.:>\-!]+/).filter(Boolean).pop();
   return seg && IDENT.test(seg) ? seg : undefined;
 }
+
+/**
+ * How a call names its target: "save" for a bare call, "recv.save" for one on
+ * a receiver ("this.save", "res.json", "pages.update", "Store.put"). The
+ * receiver is what lets tracing tell a module or class call from a method on
+ * some local object; "?" means the receiver isn't a plain name (a chained call).
+ */
+export function callRef(text: string): string | undefined {
+  const segs = text.replace(/\s+/g, "").replace(/<[^<>]*>/g, "").split(/\?\.|::|->|[.!]/).filter(Boolean);
+  const name = segs.pop();
+  if (!name || !IDENT.test(name)) return undefined;
+  if (!segs.length) return name;
+  const r = segs.pop()!;
+  const recv = r === "$this" ? "this" : IDENT.test(r) ? r : "?";
+  return `${recv}.${name}`;
+}
+
+/** The plain name of a call reference: "res.json" → "json". */
+export const refName = (ref: string) => ref.slice(ref.lastIndexOf(".") + 1);
 
 function nameOf(node: Node): string | undefined {
   const field = node.childForFieldName("name");
@@ -151,7 +172,16 @@ export function extract(tree: Tree, lang: string): TreeFacts {
   const imports: Omit<ImportRef, "targets">[] = [];
   const calls = new Set<string>();
   const callSites: [string, number][] = [];
+  const spans: [number, number][] = [];
+  /** Local names bound to a freshly built object (`const s = new UserService()`), so `s.find()` can resolve to UserService.find. File-wide, not scoped. */
+  const made = new Map<string, string>();
   const swallowed: Located[] = [];
+  const isJs = lang === "typescript" || lang === "tsx" || lang === "javascript";
+  const addCall = (ref: string | undefined, node: Node) => {
+    if (!ref) return;
+    calls.add(refName(ref));
+    callSites.push([ref, node.startPosition.row + 1]);
+  };
   const root = tree.rootNode;
   let parseErrors = 0;
 
@@ -226,24 +256,36 @@ export function extract(tree: Tree, lang: string): TreeFacts {
     switch (node.type) {
       case "import_statement":
         if (lang === "python") {
+          // `import a.b` is used as `b.x()` (well, `a.b.x()`); `import a.b as c` as `c.x()`.
           for (const c of node.namedChildren) {
-            if (c?.type === "dotted_name") addImport(c.text, node);
-            else if (c?.type === "aliased_import") addImport(c.childForFieldName("name")?.text, node);
+            if (c?.type === "dotted_name") addImport(c.text, node, { namespace: c.text.split(".").pop()! });
+            else if (c?.type === "aliased_import") {
+              const mod = c.childForFieldName("name")?.text;
+              addImport(mod, node, { namespace: c.childForFieldName("alias")?.text ?? mod?.split(".").pop() ?? "" });
+            }
           }
-        } else addImport(stringValue(node.childForFieldName("source")), node);
+        } else addImport(stringValue(node.childForFieldName("source")), node, jsBindings(node));
         break;
       case "import_from_statement": {
         const mod = node.childForFieldName("module_name");
-        const names = node.childrenForFieldName("name").filter((n): n is Node => Boolean(n)).map((n) => (n.type === "aliased_import" ? n.childForFieldName("name")?.text ?? n.text : n.text));
-        addImport(mod?.text, node, names.length ? { names } : {});
+        const named = node.childrenForFieldName("name").filter((n): n is Node => Boolean(n));
+        const names = named.map((n) => (n.type === "aliased_import" ? n.childForFieldName("name")?.text ?? n.text : n.text));
+        const bindings = named.map((n) => (n.type === "aliased_import" ? n.childForFieldName("alias")?.text ?? n.text : n.text));
+        addImport(mod?.text, node, names.length ? { names, bindings } : {});
         break;
       }
       case "export_statement":
-        addImport(stringValue(node.childForFieldName("source")), node);
+        // `export { a } from "./a"` re-exports: a barrel. The names it passes on are its bindings.
+        addImport(stringValue(node.childForFieldName("source")), node, jsBindings(node));
         break;
-      case "import_spec":
-        addImport(stringValue(node.childForFieldName("path")), node);
+      case "import_spec": {
+        // Go: the local package name is the alias, or the path's last element (skipping a /vN suffix).
+        const spec = stringValue(node.childForFieldName("path"));
+        const parts = spec?.split("/") ?? [];
+        const last = /^v\d+$/.test(parts[parts.length - 1] ?? "") ? parts[parts.length - 2] : parts[parts.length - 1];
+        addImport(spec, node, { namespace: node.childForFieldName("name")?.text ?? last ?? "" });
         break;
+      }
       case "use_declaration":
         addImport(node.childForFieldName("argument")?.text, node);
         break;
@@ -267,23 +309,55 @@ export function extract(tree: Tree, lang: string): TreeFacts {
     // Calls (and require()/import() which are calls too)
     if (CALL_TYPES.has(node.type)) {
       const fn = node.childForFieldName("function") ?? node.childForFieldName("method") ?? node.childForFieldName("macro") ?? node.childForFieldName("name");
-      const callee = fn ? lastSegment(fn.text) : undefined;
-      if (callee) {
-        calls.add(callee);
-        callSites.push([callee, node.startPosition.row + 1]);
-      }
+      // Receivers live in their own field in Java (`object`), Ruby (`receiver`) and PHP (`object`, `scope`).
+      const recv = node.type === "method_invocation" || node.type === "member_call_expression" ? node.childForFieldName("object") : lang === "ruby" ? node.childForFieldName("receiver") : node.type === "scoped_call_expression" ? node.childForFieldName("scope") : null;
+      let ref = fn ? callRef(recv ? `${recv.text}.${fn.text}` : fn.text) : undefined;
+      // Ruby `Foo.new` builds a Foo.
+      if (lang === "ruby" && ref && /^[A-Z]\w*\.new$/.test(ref)) ref = ref.slice(0, -4);
+      const callee = ref ? refName(ref) : undefined;
+      addCall(ref, node);
       const args = node.childForFieldName("arguments");
-      const firstArg = args?.namedChildren[0] ?? null;
-      if (fn && (fn.text === "require" || fn.type === "import") && (lang === "javascript" || lang === "typescript" || lang === "tsx")) {
-        addImport(stringValue(firstArg), node);
+      const argList = args?.namedChildren.filter((a): a is Node => Boolean(a)) ?? [];
+      const firstArg = argList[0] ?? null;
+      // Functions passed by name are used too: `router.get("/users", auth, getUser)`, `items.map(format)`.
+      // On a route registration, `controller.getUser` counts as well.
+      const route = /^["'`]\//.test(firstArg?.text ?? "");
+      // A decorator (`@router.post("/")`) isn't the handler; the function under it is.
+      if (route && node.parent?.type !== "decorator") spans.push([node.startPosition.row + 1, node.endPosition.row + 1]);
+      for (const a of argList) {
+        if (a.type === "identifier") addCall(a.text, a);
+        else if (route && /^(member_expression|attribute|selector_expression|field_access|scoped_identifier)$/.test(a.type)) addCall(callRef(a.text), a);
+      }
+      if (fn && (fn.text === "require" || fn.type === "import") && isJs) {
+        addImport(stringValue(firstArg), node, requireBindings(node));
       } else if (lang === "ruby" && (callee === "require" || callee === "require_relative" || callee === "load")) {
         const v = stringValue(firstArg);
         addImport(v && callee === "require_relative" ? `./${v}` : v, node);
       }
     }
 
+    // `new Foo()` (JS, Java, C#, PHP) builds a Foo: a use of its class.
+    if (node.type === "new_expression" || node.type === "object_creation_expression") {
+      const t = node.childForFieldName("constructor") ?? node.childForFieldName("type") ?? node.namedChildren.find((c) => c && /name|identifier|qualified/.test(c.type)) ?? null;
+      if (t) addCall(callRef(t.text), node);
+      const holder = node.parent?.type === "variable_declarator" ? node.parent.childForFieldName("name") : null;
+      const cls = t && callRef(t.text);
+      if (holder?.type === "identifier" && cls && !cls.includes(".")) made.set(holder.text, cls);
+    }
+    // Python: `s = UserService()` builds a UserService.
+    if (node.type === "assignment" && lang === "python") {
+      const left = node.childForFieldName("left");
+      const fn = node.childForFieldName("right")?.type === "call" ? node.childForFieldName("right")!.childForFieldName("function") : null;
+      if (left?.type === "identifier" && fn?.type === "identifier" && /^[A-Z]/.test(fn.text)) made.set(left.text, fn.text);
+    }
+    // <Component /> in JSX renders a component: a call, for tracing. Lowercase tags are HTML.
+    if ((node.type === "jsx_opening_element" || node.type === "jsx_self_closing_element") && isJs) {
+      const tag = node.childForFieldName("name")?.text;
+      if (tag && /^[A-Z]|\./.test(tag)) addCall(callRef(tag), node);
+    }
+
     // new URL("./worker.ts", import.meta.url) and new Worker("./w.js") load files too.
-    if (node.type === "new_expression" && (lang === "javascript" || lang === "typescript" || lang === "tsx")) {
+    if (node.type === "new_expression" && isJs) {
       const ctor = node.childForFieldName("constructor")?.text;
       const arg = node.childForFieldName("arguments")?.namedChildren[0] ?? null;
       const v = stringValue(arg);
@@ -326,11 +400,105 @@ export function extract(tree: Tree, lang: string): TreeFacts {
     if (parts.length && !(attached && parts.length === 1)) doc = firstParagraph(parts.join("\n\n"));
   }
 
+  if (isJs) markJsExports(root, symbols);
+  if (made.size) {
+    for (const site of callSites) {
+      const dot = site[0].indexOf(".");
+      const cls = dot > 0 ? made.get(site[0].slice(0, dot)) : undefined;
+      if (cls) site[0] = `${cls}${site[0].slice(dot)}`;
+    }
+  }
+
   for (const sym of symbols) {
     if (sym.kind !== "function" && sym.kind !== "method") continue;
     const inside = [...new Set(callSites.filter(([, line]) => line >= sym.line && line <= sym.endLine).map(([name]) => name))];
     if (inside.length) sym.calls = inside.slice(0, 60);
   }
 
-  return { symbols, imports, calls: [...calls].sort(), callSites, swallowed, ...(doc ? { doc } : {}), parseErrors };
+  return { symbols, imports, calls: [...calls].sort(), callSites, spans, swallowed, ...(doc ? { doc } : {}), parseErrors };
+}
+
+/** Local names an ES import (or re-export) binds: `import d, * as ns, { a as b } from "…"`. */
+function jsBindings(node: Node): Partial<ImportRef> {
+  const out: Partial<ImportRef> = {};
+  const names: string[] = [];
+  const bindings: string[] = [];
+  const clause = node.namedChildren.find((c) => c?.type === "import_clause" || c?.type === "export_clause");
+  for (const c of clause?.namedChildren ?? []) {
+    if (!c) continue;
+    if (c.type === "identifier") out.defaultBinding = c.text;
+    else if (c.type === "namespace_import") out.namespace = c.namedChildren.find((x) => x?.type === "identifier")?.text ?? "";
+    else if (c.type === "named_imports" || c.type === "import_specifier" || c.type === "export_specifier") {
+      for (const sp of c.type === "named_imports" ? c.namedChildren : [c]) {
+        const name = sp?.childForFieldName("name")?.text;
+        if (!name) continue;
+        names.push(name);
+        bindings.push(sp!.childForFieldName("alias")?.text ?? name);
+      }
+    }
+  }
+  // `export * from "./x"` passes everything on.
+  if (node.type === "export_statement" && !clause && node.childForFieldName("source")) out.namespace = "*";
+  if (names.length) Object.assign(out, { names, bindings });
+  return out;
+}
+
+/** `const x = require("…")` binds a namespace; `const { a, b: c } = require("…")` binds names. */
+function requireBindings(call: Node): Partial<ImportRef> {
+  const decl = call.parent?.type === "variable_declarator" ? call.parent : undefined;
+  const target = decl?.childForFieldName("name");
+  if (!target) return {};
+  if (target.type === "identifier") return { namespace: target.text };
+  if (target.type !== "object_pattern") return {};
+  const names: string[] = [];
+  const bindings: string[] = [];
+  for (const p of target.namedChildren) {
+    if (p?.type === "shorthand_property_identifier_pattern") {
+      names.push(p.text);
+      bindings.push(p.text);
+    } else if (p?.type === "pair_pattern") {
+      const k = p.childForFieldName("key")?.text;
+      const v = p.childForFieldName("value")?.text;
+      if (k && v) {
+        names.push(k);
+        bindings.push(v);
+      }
+    }
+  }
+  return names.length ? { names, bindings } : {};
+}
+
+/**
+ * Exports declared apart from the definition: `export { a, b as c }`,
+ * `export default a`, and CommonJS `module.exports = { a }` / `exports.a = a`.
+ */
+function markJsExports(root: Node, symbols: SymbolInfo[]): void {
+  const top = new Map(symbols.filter((s) => !s.parent).map((s) => [s.name, s]));
+  const mark = (name: string | undefined, asDefault = false) => {
+    const s = name ? top.get(name) : undefined;
+    if (!s) return;
+    s.exported = true;
+    if (asDefault) s.default = true;
+  };
+  for (const n of root.namedChildren) {
+    if (!n) continue;
+    if (n.type === "export_statement") {
+      const isDefault = n.children.some((c) => c?.type === "default");
+      const clause = n.namedChildren.find((c) => c?.type === "export_clause");
+      if (clause && !n.childForFieldName("source")) for (const sp of clause.namedChildren) mark(sp?.childForFieldName("name")?.text, sp?.childForFieldName("alias")?.text === "default");
+      const decl = n.childForFieldName("declaration") ?? n.childForFieldName("value") ?? n.namedChildren.find((c) => c && c.type !== "export_clause" && c.type !== "comment") ?? null;
+      if (isDefault && decl) mark(decl.type === "identifier" ? decl.text : nameOf(decl), true);
+    }
+    const assign = n.type === "expression_statement" ? n.namedChildren[0] : null;
+    if (assign?.type !== "assignment_expression") continue;
+    const left = assign.childForFieldName("left")?.text.replace(/\s+/g, "") ?? "";
+    const right = assign.childForFieldName("right");
+    if (left === "module.exports" && right?.type === "identifier") mark(right.text, true);
+    else if (left === "module.exports" && right?.type === "object") {
+      for (const p of right.namedChildren) {
+        if (p?.type === "shorthand_property_identifier") mark(p.text);
+        else if (p?.type === "pair" && p.childForFieldName("value")?.type === "identifier") mark(p.childForFieldName("value")!.text);
+      }
+    } else if (/^(module\.)?exports\.[\w$]+$/.test(left) && right?.type === "identifier") mark(right.text);
+  }
 }

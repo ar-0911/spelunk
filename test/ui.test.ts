@@ -10,8 +10,18 @@ describe("dashboard server", async () => {
   const base = ui.url.replace(/\/\?t=.*/, "");
   const get = (path: string, headers: Record<string, string> = { "x-spelunk-token": token }) => fetch(base + path, { headers });
 
-  it("serves the page and needs the token for data", async () => {
-    expect(await (await get("/", {})).text()).toContain("<title>Spelunk</title>");
+  it("swaps the link's token for a cookie, and needs one or the other for everything", async () => {
+    expect((await get("/", {})).status).toBe(401);
+    const swap = await fetch(ui.url, { redirect: "manual" });
+    expect(swap.status).toBe(303);
+    expect(swap.headers.get("location")).toBe("/");
+    const cookie = swap.headers.get("set-cookie")!;
+    expect(cookie).toMatch(/HttpOnly/);
+    expect(cookie).toMatch(/SameSite=Strict/);
+    const jar = { cookie: cookie.split(";")[0]! };
+    expect(await (await get("/", jar)).text()).toContain("<title>Spelunk</title>");
+    expect((await get("/api/state", jar)).status).toBe(200);
+    expect((await fetch(`${base}/?t=${"x".repeat(token.length)}`, { redirect: "manual" })).status).toBe(401);
     expect((await get("/api/report", {})).status).toBe(401);
     expect((await get("/api/report", { "x-spelunk-token": "x".repeat(token.length) })).status).toBe(401);
   });
@@ -43,6 +53,14 @@ describe("dashboard server", async () => {
     expect(((await c.json()) as { error: string }).error).toMatch(/doesn't look like a repository link/);
     // The temp repo isn't a git repository, so impact explains rather than crashing.
     expect((await get("/api/impact")).status).toBe(400);
+  });
+
+  it("keeps the folder picker inside the home folder", async () => {
+    const post = (path: string, body: unknown) => fetch(base + path, { method: "POST", headers: { "x-spelunk-token": token, "content-type": "application/json" }, body: JSON.stringify(body) });
+    expect((await get("/api/browse?dir=/")).status).toBe(403);
+    expect((await post("/api/open", { root: "/etc" })).status).toBe(403);
+    // The folder Spelunk was started in is always allowed, even outside home (tests run in /tmp).
+    expect((await get(`/api/browse?dir=${encodeURIComponent(root)}`)).status).toBe(200);
   });
 
   it("only reads files that are in the index", async () => {

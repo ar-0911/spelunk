@@ -35,6 +35,7 @@ export async function factsFor(path: string, source: string, hash: string): Prom
       imports: t.imports.map((i) => ({ ...i, targets: [] })),
       calls: t.calls,
       callSites: t.callSites,
+      ...(t.spans.length ? { spans: t.spans } : {}),
       swallowed: t.swallowed,
       ...(t.doc ? { doc: t.doc } : {}),
       ...(t.parseErrors ? { parseErrors: t.parseErrors } : {}),

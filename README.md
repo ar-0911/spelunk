@@ -58,7 +58,7 @@ You can also paste a GitHub, GitLab or Bitbucket link instead of choosing a fold
 
 Click any `path:line` to read the code there, with a "What's in it" tab listing the file's functions, imports, settings and errors.
 
-The dashboard runs on your machine at `127.0.0.1` only. It prints a link with a one-time token, and requests without that token are refused, so other websites open in your browser can't read your code through it.
+The dashboard runs on your machine at `127.0.0.1` only. It prints a link with a one-time token; on first load the token is swapped for an HttpOnly cookie and the link is replaced, so it doesn't sit in your browser history. Requests without the cookie (or the `x-spelunk-token` header, for scripts) are refused, so other websites open in your browser can't read your code through it. The folder picker stays inside your home folder; start it with `--allow-any-path` to open folders elsewhere.
 
 ## Commands
 
@@ -123,7 +123,7 @@ To keep it current, run it in CI on every merge to main. [`examples/ci`](example
 claude mcp add spelunk -- spelunk mcp
 ```
 
-Claude Code starts the server in your project directory. It gets these tools: `overview`, `where`, `trace`, `file`, `module`, `dependencies`, `dependents`, `symbols`, `routes`, `env_vars`, `risks`, `lookup_error`, `impact`, `onboarding_tour` and `rescan`. They answer from the index instead of reading whole files, so Claude spends fewer tokens finding its way around. The index rescans itself when it's more than 20 seconds old, so Claude sees its own edits.
+Claude Code starts the server in your project directory. It gets these tools: `overview`, `where`, `trace`, `file`, `module`, `dependencies`, `dependents`, `symbols`, `routes`, `env_vars`, `risks`, `lookup_error`, `impact`, `onboarding_tour` and `rescan`. They answer from the index instead of reading whole files, so Claude spends fewer tokens finding its way around. Before each answer the server checks `git status` and rescans only when something changed, reparsing just the changed files, so Claude sees its own edits without waiting on a scan every call. Outside git it rescans when the index is more than 20 seconds old.
 
 For other MCP clients, run `spelunk mcp -C /path/to/repo` as a stdio server.
 
@@ -137,6 +137,8 @@ spelunk map                # the guide now includes Claude's sections
 ```
 
 Each module goes to Claude with its full source, or signatures only once it passes `--max-chars` (default 120,000 characters). Answers are cached in `.spelunk/cache` keyed by the files' content, so a re-run after a small change only pays for the modules that changed. Flow steps Claude names are checked against the index: steps that point at files that don't exist are dropped, and line numbers come from the index rather than from Claude. Elemnt (13,600 lines, 11 modules) estimates at about $1.20.
+
+The model is `claude-opus-5-5`; set `SPELUNK_MODEL` to use another. Costs come from a price table per model, with cache reads and writes at their own rates. For a model the table doesn't know, Spelunk refuses to estimate rather than quote the wrong price: pass `--price-in` and `--price-out` (dollars per million tokens) or set `SPELUNK_PRICE_IN` and `SPELUNK_PRICE_OUT`. Every answer is checked against the JSON schema it was asked for; a wrong shape is retried once with the problem pointed out, then reported. Requests use the API's server-side fallback beta when it's available; set `SPELUNK_NO_FALLBACK=1` to leave it off.
 
 ## Languages
 
@@ -166,10 +168,10 @@ Everything lives in `.spelunk/` inside the repository, with its own `.gitignore`
 
 ## Limits
 
-- Call trees follow calls by name. A call through a variable, a dependency-injected object or a string lookup can't be followed, and two functions with the same name can be confused. Treat traces as a map, not a proof.
+- Call trees follow what the code says: import bindings (`import { x }`, `import * as m`, `export { }`, barrels, `require`), `this`/`self`, local definitions, `new Foo()` and the variables it's assigned to, JSX components, and handlers passed by name. `res.json()` isn't matched to an unrelated local `json`. A call through a parameter, an injected object or a string lookup can't be followed. Where only the name matched (languages whose imports don't say what they bind, like C or Ruby), the edge is marked "by name only", and each trace ends with how many calls resolved, went into packages, or couldn't be placed. Treat traces as a map, not a proof.
 - Routes registered across files (for example `app.use("/api", router)` in Express, or gin route groups) keep the path written next to the handler, without the outer prefix. FastAPI and Flask router prefixes in the same file are applied.
 - Risk findings are heuristics. "Orphan" means nothing imports the file and it isn't a known entry point; frameworks that load files by convention will show up there.
-- Files over 1 MB, binaries and generated code are skipped.
+- Files over 1 MB, binaries, dependency folders, virtualenvs and build output are skipped. Build output (`dist`, `build`, `out`, `target`, …) is only skipped next to a project manifest, so a `src/build/` folder of real code is kept; in a git repository `.gitignore` decides, and only a committed `dist/` or `coverage/` is skipped. Symbolic links, and folders that are symlinks leading out of the repository, are never followed. `spelunk scan` and `spelunk map` print what was skipped and why.
 
 ## Development
 

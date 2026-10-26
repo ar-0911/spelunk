@@ -5,9 +5,9 @@ import { dirname, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import type { RiskKind } from "./analysis/risks.js";
 import { ask, ClaudeAsk } from "./explain/ask.js";
-import { Claude, ClaudeError, estimateCost, MODEL } from "./explain/claude.js";
+import { Claude, ClaudeError, MODEL, costText } from "./explain/claude.js";
 import { explain, explanationsPath, plan } from "./explain/explain.js";
-import { formatFile, formatHits, formatModule, formatOverview, formatRisks, formatRoutes, formatTrace } from "./format.js";
+import { formatFile, formatHits, formatModule, formatOverview, formatRisks, formatRoutes, formatSkipped, formatTrace } from "./format.js";
 import { formatErrorLookup, lookupError } from "./query/errors.js";
 import { defaultBase, formatImpact, gitDiff, impact } from "./query/impact.js";
 import { resolveTarget, trace } from "./query/trace.js";
@@ -59,6 +59,8 @@ Options
   --yes                explain: go ahead and spend tokens
   --max-modules <n>    explain: explain at most n modules (default 40)
   --max-chars <n>      explain: source characters sent per module (default 120000)
+  --price-in <$>       explain, ask: input price per million tokens, for a model Spelunk doesn't know
+  --price-out <$>      explain, ask: output price per million tokens
   --full               scan: reparse every file
   --only <dirs>        scan: only these folders, comma-separated (remembered; --only . resets)
   --workers <n>        scan: parser threads (default: one per core, up to 8)
@@ -70,6 +72,7 @@ Options
   --dry-run            publish: print the page source instead of sending it
   --port <n>           ui: port to listen on (default: any free port)
   --no-open            ui: don't open a browser, just print the link
+  --allow-any-path     ui: let the folder picker go outside your home folder
   -h, --help, -v, --version
 `;
 
@@ -100,11 +103,17 @@ async function main(argv: string[]): Promise<number> {
       path: { type: "string" },
       draft: { type: "boolean" },
       "dry-run": { type: "boolean" },
+      "allow-any-path": { type: "boolean" },
+      "price-in": { type: "string" },
+      "price-out": { type: "string" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },
   });
   const [command, ...rest] = positionals;
+  // Read when a cost is computed, so the flags work like the env vars.
+  if (values["price-in"]) process.env.SPELUNK_PRICE_IN = values["price-in"];
+  if (values["price-out"]) process.env.SPELUNK_PRICE_OUT = values["price-out"];
   if (values.version) return print(VERSION);
   if (values.help || !command) {
     print(HELP);
@@ -134,7 +143,7 @@ async function main(argv: string[]): Promise<number> {
       const imports = ix.files.flatMap((f) => f.imports);
       const resolved = imports.filter((i) => i.targets.length || i.external).length;
       return print(
-        `Indexed ${ix.files.length} files in ${((Date.now() - started) / 1000).toFixed(1)}s (${ix.skipped.length} skipped).\n` +
+        `Indexed ${ix.files.length} files in ${((Date.now() - started) / 1000).toFixed(1)}s.\n${formatSkipped(ix.skipped)}\n` +
           `${ix.files.reduce((n, f) => n + f.symbols.length, 0)} symbols, ${imports.length} imports (${imports.length ? Math.round((resolved / imports.length) * 100) : 100}% resolved), ` +
           `${ix.files.reduce((n, f) => n + f.routes.length, 0)} routes.\nSaved ${relative(process.cwd(), indexPath(root))}`,
       );
@@ -147,7 +156,7 @@ async function main(argv: string[]): Promise<number> {
       const out = resolve(values.out ?? (format === "md" ? join(root, "SPELUNK.md") : join(root, ".spelunk", "map.html")));
       await mkdir(dirname(out), { recursive: true });
       await writeFile(out, format === "md" ? renderMarkdown(report) : renderHtml(report, ws.index));
-      return print(`Wrote ${relative(process.cwd(), out) || out}${report.overview ? "" : "\nTip: run `spelunk explain` first for module summaries, flows and a debugging guide."}`);
+      return print(`Wrote ${relative(process.cwd(), out) || out}\n${formatSkipped(ws.index.skipped)}${report.overview ? "" : "\nTip: run `spelunk explain` first for module summaries, flows and a debugging guide."}`);
     }
     case "where": {
       if (!text) return fail('Say what to look for: spelunk where "password reset email"');
@@ -216,7 +225,7 @@ async function main(argv: string[]): Promise<number> {
       try {
         const result = await ask(ws, new ClaudeAsk(), text, { overview: formatOverview(report), onStep: (s) => process.stderr.write(`  ${s.label}\n`) });
         if (values.json) return print(JSON.stringify(result, null, 2));
-        return print(`\n${result.answer}\n\n(${result.steps.length} lookups, ${result.usage.calls} calls, about $${estimateCost(result.usage.inputTokens, result.usage.outputTokens).toFixed(2)})`);
+        return print(`\n${result.answer}\n\n(${result.steps.length} lookups, ${result.usage.calls} calls, ${costText(result.usage)})`);
       } catch (err) {
         if (err instanceof ClaudeError) return fail(err.message);
         throw err;
@@ -251,13 +260,13 @@ async function main(argv: string[]): Promise<number> {
         throw err;
       }
       const u = claude.usage;
-      return print(`Saved ${relative(process.cwd(), explanationsPath(root))}. ${u.calls} calls (${u.cached} cached), ${u.inputTokens.toLocaleString("en")} in / ${u.outputTokens.toLocaleString("en")} out, about $${estimateCost(u.inputTokens, u.outputTokens).toFixed(2)}.\nNow run \`spelunk map\`.`);
+      return print(`Saved ${relative(process.cwd(), explanationsPath(root))}. ${u.calls} calls (${u.cached} cached), ${u.inputTokens.toLocaleString("en")} in / ${u.outputTokens.toLocaleString("en")} out, ${costText(u)}.\nNow run \`spelunk map\`.`);
     }
     case "ui": {
       const { startUi } = await import("./ui/server.js");
       // Started inside a project (or with -C), the dashboard opens it; otherwise it asks for a folder.
       const inProject = values.cwd !== undefined || existsSync(join(root, ".git")) || ["package.json", "pyproject.toml", "go.mod", "Cargo.toml"].some((f) => existsSync(join(root, f)));
-      const ui = await startUi({ ...(inProject ? { root } : {}), ...(values.port ? { port: Number(values.port) } : {}), open: !values["no-open"], log: (m) => process.stderr.write(`${m}\n`) });
+      const ui = await startUi({ ...(inProject ? { root } : {}), ...(values.port ? { port: Number(values.port) } : {}), open: !values["no-open"], ...(values["allow-any-path"] ? { allowAnyPath: true } : {}), log: (m) => process.stderr.write(`${m}\n`) });
       process.stdout.write(`Spelunk is running at ${ui.url}\nPress Ctrl+C to stop.\n`);
       return -1;
     }

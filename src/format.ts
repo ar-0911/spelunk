@@ -2,7 +2,7 @@ import { posix } from "node:path";
 import { allRoutes } from "./analysis/routes.js";
 import { RISK_INFO, type Risk, type RiskKind } from "./analysis/risks.js";
 import type { Explanations } from "./explain/explain.js";
-import type { CallNode, Step, Trace } from "./query/trace.js";
+import type { CallNode, CallStats, Step, Trace } from "./query/trace.js";
 import type { Hit } from "./query/where.js";
 import type { Report } from "./report/model.js";
 import type { FileFacts, Index } from "./types.js";
@@ -22,11 +22,21 @@ export function formatHits(query: string, hits: Hit[]): string {
 }
 
 function callTree(nodes: CallNode[], indent = "  "): string[] {
-  return nodes.flatMap((n) => [`${indent}${n.name}  ${loc(n.path, n.line)}`, ...callTree(n.children, `${indent}  `)]);
+  return nodes.flatMap((n) => [`${indent}${n.name}  ${loc(n.path, n.line)}${n.byName ? "  (by name only)" : ""}`, ...callTree(n.children, `${indent}  `)]);
 }
 
 function steps(nodes: Step[], indent = "  "): string[] {
   return nodes.flatMap((s) => [`${indent}${s.path}${s.via.length ? `  (${s.via.slice(0, 6).join(", ")}${s.via.length > 6 ? ", …" : ""})` : ""}`, ...steps(s.children, `${indent}  `)]);
+}
+
+/** One line on how far to trust a flow: what was followed exactly, by name, into packages, or not at all. */
+export function callStats(c: CallStats): string {
+  const parts = [`${c.resolved} call${c.resolved === 1 ? "" : "s"} resolved`];
+  if (c.byName) parts.push(`${c.byName} matched by name only`);
+  if (c.library) parts.push(`${c.library} into packages`);
+  const u = c.unresolved;
+  if (u.length) parts.push(`${u.length} unresolved (${u.slice(0, 5).join(", ")}${u.length > 5 ? ", …" : ""})`);
+  return `${parts.join(", ")}.`;
 }
 
 export function formatTrace(t: Trace): string {
@@ -34,6 +44,8 @@ export function formatTrace(t: Trace): string {
   if (t.callers.length) out.push("", "Called from (client code):", ...t.callers.map((c) => `  ${loc(c.path, c.line)}  ${c.label}`));
   if (t.fromEntries.length) out.push("", "Reached from entry points:", ...t.fromEntries.map((p) => `  ${p.join(" → ")}`));
   if (t.flow.length) out.push("", "What it calls:", ...callTree(t.flow));
+  const c = t.calls;
+  if (t.target.kind !== "file" && c.resolved + c.byName + c.library + c.unresolved.length) out.push("", callStats(c));
   if (t.downstream.length) out.push("", "What it imports:", ...steps(t.downstream));
   if (t.usedBy.length) out.push("", `Used by (${t.usedBy.length}):`, ...t.usedBy.slice(0, 30).map((u) => `  ${loc(u.path, u.line)}`), ...(t.usedBy.length > 30 ? [`  … and ${t.usedBy.length - 30} more`] : []));
   if (out.length === 1) out.push("", "No callers, calls or imports found. It may be reached dynamically (reflection, a string lookup, a framework convention).");
@@ -140,4 +152,24 @@ export function formatModule(r: Report, path: string, explanations?: Explanation
   if (usedBy.length) out.push(`Used by: ${usedBy.join(", ")}`);
   if (!e) out.push("", "No Claude summary for this module yet; run `spelunk explain`.");
   return out.join("\n");
+}
+
+/** "Skipped 1,204 files: 1,180 build or dependency output (dist/, …), 20 unknown language, 4 symbolic link." Nothing is dropped without saying so. */
+export function formatSkipped(skipped: { path: string; reason: string }[]): string {
+  if (!skipped.length) return "Skipped nothing.";
+  const groups = new Map<string, { files: number; dirs: string[] }>();
+  for (const s of skipped) {
+    const m = /^(.*) \((\d+) files?\)$/.exec(s.reason);
+    const reason = m ? m[1]! : s.reason;
+    const g = groups.get(reason) ?? { files: 0, dirs: [] };
+    g.files += m ? Number(m[2]) : 1;
+    if (s.path.endsWith("/")) g.dirs.push(s.path);
+    groups.set(reason, g);
+  }
+  const total = [...groups.values()].reduce((n, g) => n + g.files, 0);
+  const parts = [...groups].sort((a, b) => b[1].files - a[1].files).map(([reason, g]) => {
+    const where = g.dirs.length ? ` (${g.dirs.slice(0, 3).join(", ")}${g.dirs.length > 3 ? `, ${g.dirs.length - 3} more` : ""})` : "";
+    return `${g.files.toLocaleString("en-US")} ${reason}${where}`;
+  });
+  return `Skipped ${total.toLocaleString("en-US")} file${total === 1 ? "" : "s"}: ${parts.join(", ")}.`;
 }

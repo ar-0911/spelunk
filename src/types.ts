@@ -15,8 +15,10 @@ export interface SymbolInfo {
   doc?: string;
   /** First line of the declaration, trimmed. */
   signature: string;
-  /** Names called inside a function or method body. */
+  /** Calls made inside a function or method body: "save", or "recv.save" when called on a receiver. */
   calls?: string[];
+  /** The module's default export (`export default`, `module.exports = x`). */
+  default?: boolean;
 }
 
 export interface ImportRef {
@@ -25,6 +27,12 @@ export interface ImportRef {
   line: number;
   /** Names pulled from the module (`from a import b, c`), when the language says them. */
   names?: string[];
+  /** The local names those become (`import { a as b }` binds "b"), in the same order as `names`. */
+  bindings?: string[];
+  /** Local name for the whole module: `import * as x`, `import a.b as x`, a Go package name, `const x = require()`. "*" re-exports everything. */
+  namespace?: string;
+  /** Local name of a default import: `import x from "…"`. */
+  defaultBinding?: string;
   /** Repo-relative files this import points at. Empty when it's external or unresolved. */
   targets: string[];
   /** Package name when the import leaves the repo (npm, PyPI, Go module, crate). */
@@ -63,8 +71,13 @@ export interface FileFacts {
   imports: ImportRef[];
   /** Names this file calls, for "who calls X" across files. */
   calls: string[];
-  /** Every call as [name, line], for tracing what a route handler or a block does. */
+  /** Every call as [ref, line] ("save" or "recv.save"), for tracing what a route handler or a block does. */
   callSites: [string, number][];
+  /** Line ranges of route registrations (`app.get("/x", …)`), so tracing knows where a handler ends. */
+  spans?: [number, number][];
+  /** Size and modification time when read: an unchanged file is reused without reading it again. */
+  size?: number;
+  mtime?: number;
   routes: Route[];
   /** Environment variables read here. */
   env: Located[];
@@ -112,4 +125,4 @@ export interface Index {
   only?: string[];
 }
 
-export const INDEX_VERSION = 2;
+export const INDEX_VERSION = 3;

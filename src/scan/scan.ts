@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
-import { join, posix, resolve } from "node:path";
+import { lstat, mkdir, readFile, realpath, rename, writeFile } from "node:fs/promises";
+import { dirname, join, posix, resolve, sep } from "node:path";
 import { createInterface } from "node:readline";
 import { once } from "node:events";
 import { languageFor } from "../lang/languages.js";
@@ -76,25 +76,58 @@ export async function scan(rootArg: string, options: ScanOptions = {}): Promise<
   const prevByPath = new Map(previous?.files.map((f) => [f.path, f]));
   const only = (options.only ?? previous?.only ?? []).map((d) => d.replace(/^\.\/|\/+$/g, "")).filter(Boolean);
   const inScope = (p: string) => !only.length || only.some((d) => p === d || p.startsWith(`${d}/`));
-  const allPaths = await listFiles(root, git);
+  const listed = await listFiles(root, git);
+  const allPaths = listed.files;
   // Manifests and import resolution still see the whole repo, so imports out of the scoped folders resolve.
   const paths = allPaths.filter(inScope);
 
-  const skipped: Index["skipped"] = [];
+  const skipped: Index["skipped"] = [...listed.skipped];
+  // mtime and size only prove a file unchanged when it was last written before the previous scan began (git's "racy" rule).
+  const trustStat = previous ? Date.parse(previous.scannedAt) - 2000 : 0;
+  const started = new Date().toISOString();
   const slots: (FileFacts | undefined)[] = new Array(paths.length);
   const parser = createParser(previous ? Math.max(0, paths.length - prevByPath.size) : paths.length, options.workers);
   let done = 0;
+  // A symlinked folder inside the repo (src/vendor -> /etc) passes the lstat check on each file, so each folder's real path is checked too.
+  const realRoot = await realpath(root).catch(() => root);
+  const realDirs = new Map<string, Promise<boolean>>();
+  const insideRepo = (dir: string) => {
+    let hit = realDirs.get(dir);
+    if (!hit) {
+      hit = realpath(join(root, dir)).then((r) => r === realRoot || r.startsWith(realRoot + sep), () => false);
+      realDirs.set(dir, hit);
+    }
+    return hit;
+  };
   const work = async (i: number) => {
     const path = paths[i]!;
     if (!languageFor(path)) {
       skipped.push({ path, reason: "unknown language" });
       return;
     }
+    const abs = join(root, path);
+    const st = await lstat(abs).catch(() => undefined);
+    if (!st) return; // deleted since git listed it
+    // A symlink can point anywhere on the machine; its target is read only if it's itself part of the repo.
+    if (st.isSymbolicLink()) {
+      skipped.push({ path, reason: "symbolic link" });
+      return;
+    }
+    if (!st.isFile()) return;
+    if (!(await insideRepo(dirname(path)))) {
+      skipped.push({ path, reason: "inside a symbolic link that leads out of the repository" });
+      return;
+    }
+    const prev = prevByPath.get(path);
+    if (prev && prev.size === st.size && prev.mtime === st.mtimeMs && st.mtimeMs < trustStat) {
+      slots[i] = prev;
+      return;
+    }
     let buf: Buffer;
     try {
-      buf = await readFile(join(root, path));
+      buf = await readFile(abs);
     } catch {
-      return; // deleted since git listed it
+      return;
     }
     if (buf.length > MAX_BYTES) {
       skipped.push({ path, reason: `larger than ${MAX_BYTES / 1_000_000} MB` });
@@ -105,8 +138,8 @@ export async function scan(rootArg: string, options: ScanOptions = {}): Promise<
       return;
     }
     const hash = createHash("sha256").update(buf).digest("hex");
-    const prev = prevByPath.get(path);
-    slots[i] = prev && prev.hash === hash ? prev : await parser.parse(path, buf.toString("utf8"), hash);
+    const facts = prev && prev.hash === hash ? prev : await parser.parse(path, buf.toString("utf8"), hash);
+    slots[i] = { ...facts, size: st.size, mtime: st.mtimeMs };
   };
   try {
     // A bounded number of files in flight: enough to keep every parser busy without holding the repo in memory.
@@ -147,7 +180,7 @@ export async function scan(rootArg: string, options: ScanOptions = {}): Promise<
   return {
     version: INDEX_VERSION,
     root,
-    scannedAt: new Date().toISOString(),
+    scannedAt: started,
     ...(git.head ? { commit: git.head } : {}),
     ...(git.remote ? { remote: git.remote } : {}),
     ...(only.length ? { only } : {}),

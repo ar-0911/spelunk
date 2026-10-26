@@ -149,7 +149,6 @@ label { font-size: 13px; color: var(--muted); }
 `;
 
 const JS = String.raw`
-const T = new URLSearchParams(location.search).get("t") || "";
 const $ = (s, el = document) => el.querySelector(s);
 const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const fmt = (n) => Number(n).toLocaleString("en");
@@ -157,7 +156,7 @@ const prose = (s) => esc(s).replace(/\x60([^\x60]+)\x60/g, "<code>$1</code>").re
 const LANG_COLORS = ["#2f7d5b", "#3b6fb6", "#b5672a", "#8a4fb0", "#c0414f", "#4c9a9a", "#9a8a2e", "#6b7280"];
 
 async function api(path, body) {
-  const res = await fetch(path, { method: body ? "POST" : "GET", headers: { "x-spelunk-token": T, ...(body ? { "content-type": "application/json" } : {}) }, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch(path, { method: body ? "POST" : "GET", headers: body ? { "content-type": "application/json" } : {}, body: body ? JSON.stringify(body) : undefined });
   const data = await res.json().catch(() => ({ error: "The Spelunk server stopped. Start it again with spelunk ui." }));
   if (!res.ok) throw new Error(data.error || res.statusText);
   return data;
@@ -242,7 +241,7 @@ async function refresh() {
 
 function renderTop() {
   $("#repo").innerHTML = state.root ? '<span class="path" title="' + esc(state.root) + '">' + esc(state.root) + '</span><button class="btn" data-pick>Change</button>' : '<button class="btn" data-pick>Choose a folder</button>';
-  $("#actions").innerHTML = state.root ? '<button class="btn" id="rescan" title="Read the folder again after changes">Rescan</button><a class="btn" target="_blank" rel="noopener" href="/guide?t=' + encodeURIComponent(T) + '">Field guide ↗</a>' : "";
+  $("#actions").innerHTML = state.root ? '<button class="btn" id="rescan" title="Read the folder again after changes">Rescan</button><a class="btn" target="_blank" rel="noopener" href="/guide">Field guide ↗</a>' : "";
 }
 
 // ---------- Overview
@@ -313,7 +312,14 @@ function vTrace(target) {
   $("#tf").addEventListener("submit", (e) => { e.preventDefault(); runTrace($("#tq").value); });
   if (target) { $("#tq").value = target; runTrace(target); }
 }
-const tree = (nodes, top) => '<ul class="tree' + (top ? " top" : "") + '">' + nodes.map((n) => "<li>" + traceBtn(n.name) + " " + loc(n.path, n.line) + (n.children.length ? tree(n.children) : "") + "</li>").join("") + "</ul>";
+const tree = (nodes, top) => '<ul class="tree' + (top ? " top" : "") + '">' + nodes.map((n) => "<li>" + traceBtn(n.name) + " " + loc(n.path, n.line) + (n.byName ? ' <span class="tag" title="No import says which function this is; matched on the name alone">by name</span>' : "") + (n.children.length ? tree(n.children) : "") + "</li>").join("") + "</ul>";
+const callStats = (c) => {
+  const parts = [c.resolved + " call" + (c.resolved === 1 ? "" : "s") + " resolved"];
+  if (c.byName) parts.push(c.byName + " matched by name only");
+  if (c.library) parts.push(c.library + " into packages");
+  if (c.unresolved.length) parts.push(c.unresolved.length + " unresolved (" + c.unresolved.slice(0, 5).map(esc).join(", ") + (c.unresolved.length > 5 ? ", …" : "") + ")");
+  return '<p class="muted" style="font-size:12.5px">' + parts.join(", ") + ".</p>";
+};
 const steps = (nodes, top) => '<ul class="tree' + (top ? " top" : "") + '">' + nodes.map((s) => "<li>" + loc(s.path, s.line) + (s.via.length ? ' <span class="muted" style="font-size:12.5px">' + esc(s.via.slice(0, 6).join(", ")) + "</span>" : "") + (s.children.length ? steps(s.children) : "") + "</li>").join("") + "</ul>";
 async function runTrace(target) {
   if (!target.trim()) return;
@@ -325,6 +331,7 @@ async function runTrace(target) {
     if (t.callers.length) h += "<h3>Called from the front end</h3>" + t.callers.map((c) => "<div>" + loc(c.path, c.line) + ' <span class="muted mono" style="font-size:12px">' + esc(c.label) + "</span></div>").join("");
     if (t.fromEntries.length) h += "<h3>How the program gets here</h3>" + t.fromEntries.map((p) => '<div class="chain">' + p.map((x) => loc(x)).join('<span class="arrow">→</span>') + "</div>").join("");
     if (t.flow.length) h += "<h3>What it calls</h3>" + tree(t.flow, true);
+    if (t.calls && t.target.kind !== "file" && t.calls.resolved + t.calls.byName + t.calls.library + t.calls.unresolved.length) h += callStats(t.calls);
     if (t.downstream.length) h += "<h3>What it uses</h3>" + steps(t.downstream, true);
     if (t.usedBy.length) h += "<h3>Used by (" + t.usedBy.length + ")</h3>" + t.usedBy.slice(0, 40).map((u) => "<div>" + loc(u.path, u.line) + "</div>").join("");
     if (!t.callers.length && !t.flow.length && !t.downstream.length && !t.usedBy.length && !t.fromEntries.length) h += '<p class="muted" style="margin-top:10px">No connections found. It may be reached by name at runtime, or by a framework convention.</p>';

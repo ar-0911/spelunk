@@ -3,18 +3,19 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 import type { RiskKind } from "./analysis/risks.js";
-import { formatEnv, formatFile, formatHits, formatModule, formatOverview, formatRisks, formatRoutes, formatTrace } from "./format.js";
+import { formatEnv, formatFile, formatHits, formatModule, formatOverview, formatRisks, formatRoutes, formatSkipped, formatTrace } from "./format.js";
 import { formatErrorLookup, lookupError } from "./query/errors.js";
 import { defaultBase, formatImpact, gitDiff, impact } from "./query/impact.js";
 import { resolveTarget, trace } from "./query/trace.js";
 import { where } from "./query/where.js";
 import { buildReport, type Report } from "./report/model.js";
 import { buildTour, formatTour } from "./report/tour.js";
+import { changeStamp } from "./scan/walk.js";
 import { openWorkspace, type Workspace } from "./workspace.js";
 
 const VERSION = (JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")) as { version: string }).version;
 
-/** How long an index is trusted before a tool call rescans (incrementally) to pick up edits. */
+/** Outside git: how long an index is trusted before a tool call rescans (incrementally) to pick up edits. */
 const FRESH_MS = 20_000;
 
 const RISK_KINDS = ["missing-route", "swallowed-error", "cycle", "duplicate", "hotspot", "large-file", "long-function", "untested", "orphan", "env-undocumented", "env-unused", "todo", "parse-error"] as const;
@@ -22,20 +23,26 @@ const RISK_KINDS = ["missing-route", "swallowed-error", "cycle", "duplicate", "h
 const text = (t: string) => ({ content: [{ type: "text" as const, text: t }] });
 
 /**
- * The same answers as the CLI, as MCP tools. The index is rescanned when it's
- * older than a few seconds, so an agent editing the repo sees its own changes.
+ * The same answers as the CLI, as MCP tools. Each call checks `git status`
+ * (plus the times of dirty files) and rescans only when the tree changed, so
+ * an agent editing the repo sees its own changes without paying for a scan on
+ * every call. Outside git, the index is trusted for a few seconds instead.
  */
 export function createServer(root: string): McpServer {
-  let current: { ws: Workspace; at: number; report?: Report } | undefined;
+  let current: { ws: Workspace; at: number; stamp: string | undefined; report?: Report } | undefined;
   let pending: Promise<Workspace> | undefined;
 
   const workspace = async (force = false): Promise<Workspace> => {
-    if (current && !force && Date.now() - current.at < FRESH_MS) return current.ws;
-    pending ??= openWorkspace(root, { refresh: true })
-      .then((ws) => {
-        current = { ws, at: Date.now() };
-        return ws;
-      })
+    if (current && !force && !pending) {
+      if (current.stamp === undefined ? Date.now() - current.at < FRESH_MS : (await changeStamp(root)) === current.stamp) return current.ws;
+    }
+    pending ??= (async () => {
+      // Stamped before the scan, so an edit made while it runs is caught by the next call.
+      const stamp = await changeStamp(root);
+      const ws = await openWorkspace(root, { refresh: true });
+      current = { ws, at: Date.now(), stamp };
+      return ws;
+    })()
       .finally(() => {
         pending = undefined;
       });
@@ -254,7 +261,7 @@ export function createServer(root: string): McpServer {
     },
     async () => {
       const ws = await workspace(true);
-      return text(`Indexed ${ws.index.files.length} files (${ws.index.skipped.length} skipped).`);
+      return text(`Indexed ${ws.index.files.length} files. ${formatSkipped(ws.index.skipped)}`);
     },
   );
 

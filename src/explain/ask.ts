@@ -6,7 +6,7 @@ import { formatFile, formatHits, formatTrace } from "../format.js";
 import { resolveTarget, trace } from "../query/trace.js";
 import { where } from "../query/where.js";
 import type { Workspace } from "../workspace.js";
-import { ClaudeError, MODEL } from "./claude.js";
+import { addUsage, ClaudeError, claudeError, emptyUsage, MODEL, streamMessage, type Usage } from "./claude.js";
 
 /**
  * "Ask a question": Claude answers about the repository using Spelunk's index
@@ -29,7 +29,7 @@ export interface AskRequest {
 export interface AskReply {
   content: Block[];
   stop_reason: string | null;
-  usage?: { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null };
+  usage?: { input_tokens?: number | null; output_tokens?: number | null; cache_read_input_tokens?: number | null; cache_creation_input_tokens?: number | null };
 }
 
 /** One model call; tests pass a fake. */
@@ -49,7 +49,7 @@ export interface AskResult {
   /** path:line references from the answer that exist in the index. */
   cites: { path: string; line?: number }[];
   steps: AskStep[];
-  usage: { calls: number; inputTokens: number; outputTokens: number };
+  usage: Usage;
 }
 
 const SYSTEM = `You answer questions about one software repository for an engineer who is new to it. You can't see the code directly; use the tools, which read Spelunk's index of the repository (every file's symbols, imports, routes, errors and env vars) and the files themselves.
@@ -162,13 +162,11 @@ export async function ask(ws: Workspace, model: AskModel, question: string, opti
   messages.push({ role: "user", content: `${!options.history?.length && options.overview ? `<repository_overview>\n${options.overview}\n</repository_overview>\n\n` : ""}${question}` });
 
   const steps: AskStep[] = [];
-  const usage = { calls: 0, inputTokens: 0, outputTokens: 0 };
+  const usage = emptyUsage();
   for (let turn = 0; turn < MAX_TURNS; turn++) {
     // On the last turn tools can't be called, so Claude has to answer with what it found.
     const reply = await model.send({ system: SYSTEM, messages, tools: TOOLS, ...(turn === MAX_TURNS - 1 ? { noTools: true } : {}) });
-    usage.calls++;
-    usage.inputTokens += (reply.usage?.input_tokens ?? 0) + (reply.usage?.cache_read_input_tokens ?? 0);
-    usage.outputTokens += reply.usage?.output_tokens ?? 0;
+    addUsage(usage, reply.usage);
     if (reply.stop_reason === "refusal") throw new ClaudeError("Claude declined to answer this question.");
     // Thinking and tool blocks go back exactly as received.
     messages.push({ role: "assistant", content: reply.content as Anthropic.Beta.BetaContentBlockParam[] });
@@ -202,25 +200,18 @@ export class ClaudeAsk implements AskModel {
 
   async send(req: AskRequest): Promise<AskReply> {
     try {
-      return await this.client.beta.messages
-        .stream({
-          model: MODEL,
-          max_tokens: 16000,
-          betas: ["server-side-fallback-2026-07-01"],
-          fallbacks: "default",
-          thinking: { type: "adaptive" },
-          output_config: { effort: "medium" },
-          system: [{ type: "text", text: req.system, cache_control: { type: "ephemeral" } }],
-          tools: req.tools,
-          ...(req.noTools ? { tool_choice: { type: "none" as const } } : {}),
-          messages: req.messages,
-        })
-        .finalMessage();
+      return await streamMessage(this.client, {
+        model: MODEL,
+        max_tokens: 16000,
+        thinking: { type: "adaptive" },
+        output_config: { effort: "medium" },
+        system: [{ type: "text", text: req.system, cache_control: { type: "ephemeral" } }],
+        tools: req.tools,
+        ...(req.noTools ? { tool_choice: { type: "none" as const } } : {}),
+        messages: req.messages,
+      });
     } catch (err) {
-      if (err instanceof Anthropic.AuthenticationError) throw new ClaudeError("Your Anthropic API key was rejected. Set ANTHROPIC_API_KEY or run `ant auth login`.");
-      if (err instanceof Anthropic.RateLimitError) throw new ClaudeError("Claude is rate limiting this key. Wait a minute and ask again.");
-      if (err instanceof Anthropic.APIError) throw new ClaudeError(`Claude returned an error (${err.status ?? "network"}): ${err.message}`);
-      throw err;
+      throw claudeError(err);
     }
   }
 }
