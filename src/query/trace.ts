@@ -32,7 +32,7 @@ export interface CallStats {
   /** Followed through an import binding, a local definition, or `this`. */
   resolved: number;
   byName: number;
-  /** Calls into an installed package (`res.json`, `axios.get`). */
+  /** Calls into an installed package (`axios.get`) or the runtime (`JSON.parse`). */
   library: number;
   /** Calls Spelunk couldn't place: built-ins, methods on values of unknown type, dynamic calls. */
   unresolved: string[];
@@ -216,10 +216,17 @@ export function definition(index: Index, g: Graph, from: string, ref: string): D
   return undefined;
 }
 
-/** True when the call's root name is bound by an import of an installed package. */
+/** Globals of the JS, Python and Node runtimes: calls to them are the platform's, not unresolved code. */
+const BUILTINS = new Set([
+  "Array", "Object", "String", "Number", "Boolean", "Symbol", "BigInt", "Promise", "Error", "TypeError", "RangeError", "SyntaxError", "Map", "Set", "WeakMap", "WeakSet",
+  "JSON", "Math", "Date", "RegExp", "Reflect", "Proxy", "Buffer", "URL", "URLSearchParams", "Infinity", "NaN", "Intl", "console", "process", "globalThis", "window", "document",
+]);
+
+/** True when the call's root name is bound by an import of an installed package, or is a runtime global. */
 function libraryCall(index: Index, g: Graph, from: string, ref: string): boolean {
   const here = g.files.get(from) ?? index.files.find((f) => f.path === from);
   const head = ref.split(".")[0]!;
+  if (BUILTINS.has(head)) return true;
   return Boolean(here?.imports.some((i) => !i.targets.length && i.external && (i.namespace === head || i.defaultBinding === head || i.bindings?.includes(head))));
 }
 

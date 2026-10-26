@@ -29,11 +29,11 @@ function steps(nodes: Step[], indent = "  "): string[] {
   return nodes.flatMap((s) => [`${indent}${s.path}${s.via.length ? `  (${s.via.slice(0, 6).join(", ")}${s.via.length > 6 ? ", …" : ""})` : ""}`, ...steps(s.children, `${indent}  `)]);
 }
 
-/** One line on how far to trust a flow: what was followed exactly, by name, into packages, or not at all. */
+/** One line on how far to trust a flow: what was followed exactly, by name, into packages or built-ins, or not at all. */
 export function callStats(c: CallStats): string {
   const parts = [`${c.resolved} call${c.resolved === 1 ? "" : "s"} resolved`];
   if (c.byName) parts.push(`${c.byName} matched by name only`);
-  if (c.library) parts.push(`${c.library} into packages`);
+  if (c.library) parts.push(`${c.library} into packages or built-ins`);
   const u = c.unresolved;
   if (u.length) parts.push(`${u.length} unresolved (${u.slice(0, 5).join(", ")}${u.length > 5 ? ", …" : ""})`);
   return `${parts.join(", ")}.`;

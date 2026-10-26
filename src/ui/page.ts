@@ -316,7 +316,7 @@ const tree = (nodes, top) => '<ul class="tree' + (top ? " top" : "") + '">' + no
 const callStats = (c) => {
   const parts = [c.resolved + " call" + (c.resolved === 1 ? "" : "s") + " resolved"];
   if (c.byName) parts.push(c.byName + " matched by name only");
-  if (c.library) parts.push(c.library + " into packages");
+  if (c.library) parts.push(c.library + " into packages or built-ins");
   if (c.unresolved.length) parts.push(c.unresolved.length + " unresolved (" + c.unresolved.slice(0, 5).map(esc).join(", ") + (c.unresolved.length > 5 ? ", …" : "") + ")");
   return '<p class="muted" style="font-size:12.5px">' + parts.join(", ") + ".</p>";
 };
