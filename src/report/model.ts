@@ -13,6 +13,8 @@ export interface Report {
   name: string;
   commit?: string;
   remote?: string;
+  /** How to link a file on the code host: `template` with {path} and {line}, where {line} becomes `anchor` + number. */
+  links?: { template: string; anchor: string };
   generatedAt: string;
   stats: { files: number; codeFiles: number; codeLines: number; tests: number; routes: number; env: number; symbols: number };
   languages: { language: string; files: number; lines: number }[];
@@ -73,7 +75,7 @@ export function buildReport(index: Index, g: Graph, risks: Risk[], explanations?
   return {
     name: rootManifest?.name ?? basename(index.root),
     ...(index.commit ? { commit: index.commit } : {}),
-    ...(index.remote ? { remote: index.remote } : {}),
+    ...(index.remote ? { remote: index.remote, links: linkTemplate(index.remote, index.commit ?? "HEAD") } : {}),
     generatedAt: new Date().toISOString(),
     stats: {
       files: index.files.length,
@@ -106,8 +108,19 @@ export function buildReport(index: Index, g: Graph, risks: Risk[], explanations?
   };
 }
 
+/** Each host spells "this file at this commit, this line" differently. */
+export function linkTemplate(remote: string, commit: string): { template: string; anchor: string } {
+  const host = new URL(remote).hostname;
+  if (/\/projects\/[^/]+\/repos\//.test(remote)) return { template: `${remote}/browse/{path}?at=${commit}{line}`, anchor: "#" }; // Bitbucket Data Center
+  if (host.includes("bitbucket")) return { template: `${remote}/src/${commit}/{path}{line}`, anchor: "#lines-" };
+  if (host.includes("gitlab")) return { template: `${remote}/-/blob/${commit}/{path}{line}`, anchor: "#L" };
+  if (host.includes("codeberg") || host.includes("gitea")) return { template: `${remote}/src/commit/${commit}/{path}{line}`, anchor: "#L" };
+  return { template: `${remote}/blob/${commit}/{path}{line}`, anchor: "#L" };
+}
+
 /** A link to a file (and line) on the code host, or undefined when there's no known remote. */
 export function sourceUrl(r: Pick<Report, "remote" | "commit">, path: string, line?: number): string | undefined {
   if (!r.remote) return undefined;
-  return `${r.remote}/blob/${r.commit ?? "HEAD"}/${path}${line ? `#L${line}` : ""}`;
+  const { template, anchor } = linkTemplate(r.remote, r.commit ?? "HEAD");
+  return template.replace("{path}", path).replace("{line}", line ? `${anchor}${line}` : "");
 }

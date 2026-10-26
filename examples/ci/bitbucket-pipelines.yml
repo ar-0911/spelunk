@@ -1,0 +1,28 @@
+# Merge into bitbucket-pipelines.yml in the repository you want mapped.
+#
+# On every merge to main: publishes the codebase map to Elemnt (one page, updated in place).
+# On every pull request: prints "what this change touches" in the build log.
+#
+# Repository variables: ELEMNT_URL, ELEMNT_SPACE, and ELEMNT_TOKEN (secured).
+image: node:22
+
+pipelines:
+  branches:
+    main:
+      - step:
+          name: Publish the map to Elemnt
+          clone:
+            depth: full # history for hotspots
+          script:
+            - npm install --global github:ar-0911/spelunk
+            - spelunk publish
+  pull-requests:
+    "**":
+      - step:
+          name: What this change touches
+          clone:
+            depth: full
+          script:
+            - npm install --global github:ar-0911/spelunk
+            - git fetch origin "$BITBUCKET_PR_DESTINATION_BRANCH"
+            - spelunk impact "origin/$BITBUCKET_PR_DESTINATION_BRANCH"

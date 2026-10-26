@@ -1,0 +1,41 @@
+# Copy to .github/workflows/spelunk.yml in the repository you want mapped.
+#
+# On every merge to main: publishes the codebase map to Elemnt (one page, updated in place).
+# On every pull request: adds "what this change touches" to the run's summary page.
+#
+# Secrets: ELEMNT_TOKEN (an Elemnt API token that can write to the space).
+# Variables: ELEMNT_URL (e.g. https://docs.example.com) and ELEMNT_SPACE (e.g. eng).
+name: Spelunk
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  spelunk:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # history for hotspots and for comparing a PR with main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install Spelunk
+        run: npm install --global github:ar-0911/spelunk
+
+      - name: Publish the map to Elemnt
+        if: github.event_name == 'push'
+        env:
+          ELEMNT_URL: ${{ vars.ELEMNT_URL }}
+          ELEMNT_SPACE: ${{ vars.ELEMNT_SPACE }}
+          ELEMNT_TOKEN: ${{ secrets.ELEMNT_TOKEN }}
+        run: spelunk publish
+
+      - name: What this change touches
+        if: github.event_name == 'pull_request'
+        run: spelunk impact "origin/${{ github.base_ref }}" >> "$GITHUB_STEP_SUMMARY"

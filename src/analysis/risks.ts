@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { join, posix } from "node:path";
 import { CODE_LANGUAGES } from "../lang/languages.js";
@@ -175,6 +174,13 @@ export async function findRisks(index: Index, g: Graph, options: RiskOptions = {
 }
 
 const WINDOW = 6;
+
+/** 32-bit FNV-1a, as base 36. */
+function fnv(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 0x01000193);
+  return (h >>> 0).toString(36);
+}
 const MIN_CHARS = 160;
 
 /** Normalised lines: no indentation, comments, blank or brace-only lines. */
@@ -187,18 +193,28 @@ function normalise(text: string): { text: string; line: number }[] {
 
 async function duplicates(files: FileFacts[], read: (p: string) => Promise<string | undefined>): Promise<Risk[]> {
   const seen = new Map<string, { path: string; line: number; end: number }[]>();
-  for (const f of files) {
-    const text = await read(f.path);
+  // Reads run 64 at a time (a big repo is mostly waiting on disk); hashing stays in file order.
+  const texts: (string | undefined)[] = new Array(files.length);
+  for (let i = 0; i < files.length; i += 64) {
+    const batch = await Promise.all(files.slice(i, i + 64).map((f) => read(f.path)));
+    batch.forEach((t, j) => (texts[i + j] = t));
+  }
+  for (const [n, f] of files.entries()) {
+    const text = texts[n];
+    texts[n] = undefined;
     if (!text) continue;
     const lines = normalise(text);
+    // Each line is hashed once; a window's key is its six line hashes, so no window text is rebuilt.
+    const hashes = lines.map((l) => fnv(l.text));
     for (let i = 0; i + WINDOW <= lines.length; i++) {
-      const win = lines.slice(i, i + WINDOW);
-      const joined = win.map((l) => l.text).join("\n");
-      if (joined.length < MIN_CHARS) continue;
-      const h = createHash("sha1").update(joined).digest("hex");
-      const list = seen.get(h) ?? [];
-      list.push({ path: f.path, line: win[0]!.line, end: win[WINDOW - 1]!.line });
-      seen.set(h, list);
+      let chars = WINDOW - 1;
+      for (let k = i; k < i + WINDOW; k++) chars += lines[k]!.text.length;
+      if (chars < MIN_CHARS) continue;
+      const h = hashes.slice(i, i + WINDOW).join(",");
+      const loc = { path: f.path, line: lines[i]!.line, end: lines[i + WINDOW - 1]!.line };
+      const list = seen.get(h);
+      if (list) list.push(loc);
+      else seen.set(h, [loc]);
     }
   }
   // Merge overlapping windows per pair of files into blocks.
