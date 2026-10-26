@@ -101,11 +101,14 @@ function treeHas(nodes: CallNode[], keys: Set<string>): CallNode | undefined {
 
 export function impact(index: Index, g: Graph, diff: string, risks: Risk[], refs: { base: string; head: string }): Impact {
   const byPath = new Map(index.files.map((f) => [f.path, f]));
-  const files: ChangedFile[] = parseDiff(diff).map((c) => {
-    const f = byPath.get(c.path);
-    const symbols = f && c.status !== "deleted" ? f.symbols.filter((s) => s.kind !== "interface" && s.kind !== "type" && (c.status === "added" || overlaps(s, c.ranges))) : [];
-    return { ...c, symbols, inIndex: Boolean(f) };
-  });
+  const files: ChangedFile[] = parseDiff(diff)
+    .map((c) => {
+      const f = byPath.get(c.path);
+      const symbols = f && c.status !== "deleted" ? f.symbols.filter((s) => s.kind !== "interface" && s.kind !== "type" && (c.status === "added" || overlaps(s, c.ranges))) : [];
+      return { ...c, symbols, inIndex: Boolean(f) };
+    })
+    // Code first (the files whose functions changed), then the rest, each in path order.
+    .sort((a, b) => Number(!a.symbols.length) - Number(!b.symbols.length) || a.path.localeCompare(b.path));
   const changed = new Set(files.filter((f) => f.inIndex).map((f) => f.path));
 
   // Breadth-first over importers, up to three hops.

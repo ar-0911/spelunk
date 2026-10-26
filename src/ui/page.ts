@@ -10,7 +10,7 @@ ${THEME_CSS}
 * { box-sizing: border-box; }
 html, body { height: 100%; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 14.5px/1.55 var(--body); }
-button, input { font: inherit; color: inherit; }
+button, input, textarea { font: inherit; color: inherit; }
 a { color: var(--accent-ink); }
 code, .mono { font-family: var(--mono); font-size: .86em; }
 code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; overflow-wrap: anywhere; }
@@ -119,6 +119,25 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .dirs button:hover { background: var(--accent-soft); }
 .welcome { max-width: 640px; margin: 8vh auto 0; text-align: left; }
 .welcome ol { padding-left: 20px; color: var(--muted); }
+.progress { height: 8px; border-radius: 4px; background: var(--line); max-width: 560px; overflow: hidden; margin-top: 14px; }
+.progress span { display: block; height: 100%; background: var(--accent); transition: width .2s; }
+.tstep { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 14px; padding: 16px 0; border-bottom: 1px solid var(--line); }
+.tstep .tnum { width: 30px; height: 30px; border-radius: 50%; display: grid; place-items: center; font: 600 13px var(--mono); border: 1.5px solid var(--line-strong); color: var(--muted); }
+.tstep.done .tnum { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+.tstep.done h3 { color: var(--muted); }
+.topen { display: grid; gap: 4px; }
+.tick { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); margin-top: 10px; cursor: pointer; }
+.askbox { display: grid; gap: 8px; max-width: 760px; margin-top: 14px; }
+.askbox .field { max-width: none; resize: vertical; }
+.q { margin: 18px 0 6px; font-weight: 600; max-width: 80ch; }
+.q::before { content: "You asked"; display: block; font: 500 11px var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 2px; }
+.a { border-left: 3px solid var(--accent); padding: 2px 0 2px 14px; max-width: 80ch; }
+.a ul, .a ol { padding-left: 20px; margin: 0 0 10px; } .a li { margin-bottom: 4px; }
+.a .lnk { font-size: 12px; }
+.card.start { border-color: var(--accent); margin-top: 12px; max-width: 760px; }
+.orline { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; margin-top: 6px; }
+.orline::before, .orline::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
+label { font-size: 13px; color: var(--muted); }
 @media (max-width: 820px) {
   .body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
   nav.side { border-right: 0; border-bottom: 1px solid var(--line); display: flex; overflow-x: auto; padding: 6px 10px; gap: 2px; }
@@ -152,13 +171,18 @@ let state = {}, report = null, view = "overview", riskKind = "";
 
 const VIEWS = [
   ["overview", "Overview", "M3 12h18M3 6h18M3 18h12"],
+  ["tour", "First day", "M5 21V4m0 0h11l-2 4 2 4H5"],
   ["find", "Find", "M11 19a8 8 0 1 1 5.3-14 8 8 0 0 1-5.3 14Zm10 2-4.3-4.3"],
+  ["ask", "Ask", "M4 5h16v11H9l-5 4V5Zm5 5h.01M12 10h.01M15 10h.01"],
   ["trace", "Trace", "M4 6h6v4H4zM14 14h6v4h-6zM7 10v4a2 2 0 0 0 2 2h5"],
+  ["error", "Error lookup", "M12 8v5m0 3v.5M10.3 3.9 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"],
+  ["changes", "Changes", "M6 3v12m0 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm12-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 0c0 5-6 4-12 9"],
   ["risks", "Risks", "M12 3 2 21h20L12 3Zm0 7v5m0 3v.5"],
   ["routes", "Routes", "M4 7h10M4 12h16M4 17h7"],
   ["debug", "Debugging", "M9 9h6v8a3 3 0 0 1-6 0V9Zm-4 3h4m6 0h4M6 7l3 2m9-2-3 2M6 19l3-2m9 2-3-2"],
   ["config", "Config", "M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6Z"],
   ["explain", "Explain with Claude", "M12 3v3m0 12v3M3 12h3m12 0h3M6 6l2 2m8 8 2 2M6 18l2-2m8-8 2-2"],
+  ["share", "Share", "M4 12v7h16v-7M12 3v12m0-12-4 4m4-4 4 4"],
 ];
 const icon = (d) => '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + d + '"/></svg>';
 
@@ -175,13 +199,14 @@ function go(v, arg) {
   main.scrollTop = 0;
   if (!state.root) return renderWelcome();
   if (!report) { main.innerHTML = '<div class="view empty"><span class="spinner"></span> Reading the repository…</div>'; return; }
-  ({ overview: vOverview, find: vFind, trace: vTrace, risks: vRisks, routes: vRoutes, debug: vDebug, config: vConfig, explain: vExplain })[v](arg);
+  pathSet = null;
+  Promise.resolve(({ overview: vOverview, tour: vTour, find: vFind, ask: vAsk, trace: vTrace, error: vError, changes: vChanges, risks: vRisks, routes: vRoutes, debug: vDebug, config: vConfig, explain: vExplain, share: vShare })[v](arg)).catch((e) => { $("#main").innerHTML = '<div class="view"><div class="note err">' + esc(e.message) + "</div></div>"; });
 }
 
 // ---------- Welcome & folder picker
 function renderWelcome() {
   $("#main").innerHTML = '<div class="welcome"><h1>Find your way around a codebase</h1><p class="lede">Spelunk reads a project folder and shows you how it fits together: what each part does, where things live, how a request flows through the code, and where bugs are likely to hide.</p>' +
-    '<p style="margin-top:20px"><button class="btn primary" data-pick>Choose a project folder</button></p><ol><li>Pick the folder that holds the code (the one with package.json, pyproject.toml, go.mod or .git).</li><li>Spelunk reads it locally. Nothing leaves your computer unless you ask Claude to explain it.</li><li>Start at Overview, or type what you are looking for in Find.</li></ol></div>';
+    '<p style="margin-top:20px"><button class="btn primary" data-pick>Choose a project folder</button></p><ol><li>Pick the folder that holds the code (the one with package.json, pyproject.toml, go.mod or .git).</li><li>Spelunk reads it locally. Nothing leaves your computer unless you ask Claude to explain it.</li><li>Or paste a GitHub, GitLab or Bitbucket link and Spelunk downloads it for you.</li><li>New here? Start with First day. Looking for something? Use Find or Ask.</li></ol></div>';
 }
 
 let pickerDir = "";
@@ -388,6 +413,204 @@ async function pollJob() {
   else if (j.summary && !report.overview) report = await api("/api/report");
 }
 
+// ---------- Markdown answers, with path:line citations as links
+let pathSet = null;
+const knownPath = (p) => { if (!pathSet) pathSet = new Set(report.modules.flatMap((m) => m.files.map((f) => f.path))); return pathSet.has(p); };
+function citeOrCode(c) {
+  const m = c.match(/^([\w@./-]+\.[A-Za-z0-9]+)(?::(\d+)(?:-\d+)?)?$/);
+  return m && knownPath(m[1]) ? loc(m[1], Number(m[2]) || 0) : "<code>" + esc(c) + "</code>";
+}
+function mdInline(s) {
+  return s.split(/\x60([^\x60]+)\x60/).map((part, i) => i % 2 ? citeOrCode(part) :
+    esc(part).replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>").replace(/([\w@./-]+\.[A-Za-z0-9]+)(?::(\d+))?/g, (all, p, l) => knownPath(p) ? loc(p, Number(l) || 0) : all)).join("");
+}
+function md(text) {
+  const out = [], lines = String(text || "").split("\n");
+  let list = null, para = [], fence = null;
+  const flush = () => { if (para.length) out.push("<p>" + mdInline(para.join(" ")) + "</p>"); para = []; if (list) { out.push("</" + list + ">"); list = null; } };
+  for (const line of lines) {
+    if (fence !== null) { if (/^\x60\x60\x60/.test(line)) { out.push('<pre class="log">' + esc(fence.join("\n")) + "</pre>"); fence = null; } else fence.push(line); continue; }
+    if (/^\x60\x60\x60/.test(line)) { flush(); fence = []; continue; }
+    const h = line.match(/^#{1,4}\s+(.*)/), li = line.match(/^\s*(?:[-*]|(\d+)\.)\s+(.*)/);
+    if (h) { flush(); out.push("<h3>" + mdInline(h[1]) + "</h3>"); }
+    else if (li) { if (para.length) { out.push("<p>" + mdInline(para.join(" ")) + "</p>"); para = []; } const kind = li[1] ? "ol" : "ul"; if (list !== kind) { if (list) out.push("</" + list + ">"); out.push("<" + kind + ">"); list = kind; } out.push("<li>" + mdInline(li[2]) + "</li>"); }
+    else if (!line.trim()) flush();
+    else { if (list) { out.push("</" + list + ">"); list = null; } para.push(line.trim()); }
+  }
+  if (fence !== null) out.push('<pre class="log">' + esc(fence.join("\n")) + "</pre>");
+  flush();
+  return out.join("");
+}
+
+// ---------- First day (tour)
+const tourKey = () => "spelunk-tour:" + state.root;
+function tourDone() { try { return new Set(JSON.parse(localStorage.getItem(tourKey()) || "[]")); } catch { return new Set(); } }
+async function vTour() {
+  $("#main").innerHTML = '<div class="view empty"><span class="spinner"></span></div>';
+  const steps = await api("/api/tour");
+  if (view !== "tour") return;
+  const done = tourDone();
+  const n = steps.filter((s) => done.has(s.id)).length;
+  let h = '<div class="view"><h1>Your first day</h1><p class="lede">A walk through ' + esc(report.name) + ' in ' + steps.length + ' steps. Open each file in order; you do not need to read every line. Tick a step when you are done; your progress is kept in this browser.</p>' +
+    '<div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="' + steps.length + '" aria-valuenow="' + n + '"><span style="width:' + (n / steps.length) * 100 + '%"></span></div><p class="muted" style="font-size:13px">' + n + " of " + steps.length + " done</p>";
+  h += steps.map((s, i) => '<section class="tstep' + (done.has(s.id) ? " done" : "") + '"><div class="tnum">' + (done.has(s.id) ? "✓" : i + 1) + '</div><div class="tbody"><h3 style="margin-top:2px">' + esc(s.title) + "</h3><p>" + prose(s.body) + "</p>" +
+    (s.commands && s.commands.length ? '<div class="log" style="margin-bottom:10px">' + s.commands.map((c) => esc(c.command) + '  <span class="muted"># ' + esc(c.why) + "</span>").join("\n") + "</div>" : "") +
+    (s.open.length ? '<div class="topen">' + s.open.map((f) => "<div>" + loc(f.path, f.line || 0) + ' <span class="muted" style="font-size:13px">' + esc(f.why) + "</span></div>").join("") + "</div>" : "") +
+    (s.tryIt ? '<p style="margin-top:8px;font-size:13.5px">Try it: ' + (s.tryIt.kind === "trace" ? traceBtn(s.tryIt.query, s.tryIt.prompt) : '<button class="lnk" data-find="' + esc(s.tryIt.query) + '">' + esc(s.tryIt.prompt) + "</button>") + "</p>" : "") +
+    '<label class="tick"><input type="checkbox" data-tour="' + esc(s.id) + '"' + (done.has(s.id) ? " checked" : "") + "> Done</label></div></section>").join("");
+  $("#main").innerHTML = h + "</div>";
+}
+document.addEventListener("change", (e) => {
+  const id = e.target.dataset && e.target.dataset.tour;
+  if (!id) return;
+  const done = tourDone();
+  if (e.target.checked) done.add(id); else done.delete(id);
+  try { localStorage.setItem(tourKey(), JSON.stringify([...done])); } catch {}
+  vTour();
+});
+
+// ---------- Ask
+let askHistory = [], askPoll, askKeyGiven = false;
+function vAsk() {
+  const needKey = !state.hasEnvKey && !askKeyGiven;
+  let h = '<div class="view"><h1>Ask</h1><p class="lede">Ask anything about this code in plain words. Claude searches and reads the project the way an engineer would, and every answer links to the lines it is based on.</p>' +
+    '<div id="convo">' + askHistory.map((x) => '<div class="q">' + esc(x.question) + '</div><div class="a">' + md(x.answer) + (x.steps ? '<details class="muted" style="font-size:12.5px"><summary>Looked at ' + x.steps.length + " places</summary>" + x.steps.map((s) => "<div>" + esc(s.label) + "</div>").join("") + "</details>" : "") + "</div>").join("") + '</div><div id="askrun"></div>' +
+    '<form id="askf" class="askbox"><textarea class="field" id="askq" rows="3" placeholder="e.g. How does saving a page work? Where are permissions checked? Why would login fail with a 401?" aria-label="Your question"></textarea>' +
+    (needKey ? '<input class="field" id="askkey" type="password" autocomplete="off" placeholder="Anthropic API key (sk-ant-…), kept in memory until you close Spelunk" aria-label="Anthropic API key">' : "") +
+    '<div style="display:flex;gap:8px;align-items:center"><button class="btn primary" id="askgo">Ask</button>' + (askHistory.length ? '<button type="button" class="btn" id="asknew">New conversation</button>' : "") + '<span class="muted" style="font-size:12.5px">Uses ' + esc(state.model) + " on your Anthropic account; a question usually costs a few cents.</span></div></form>";
+  if (!askHistory.length) h += '<div class="chips" style="margin-top:12px">' + ["What does this project do, in two sentences?", "How does a request reach the database?", "Where is authentication handled?", "What should I read first to fix bugs here?"].map((x) => '<button class="chip" data-ask="' + esc(x) + '">' + esc(x) + "</button>").join("") + "</div>";
+  $("#main").innerHTML = h + "</div>";
+  $("#askf").addEventListener("submit", (e) => { e.preventDefault(); startAsk($("#askq").value); });
+  $("#askq").addEventListener("keydown", (e) => { if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) startAsk($("#askq").value); });
+  if ($("#asknew")) $("#asknew").addEventListener("click", () => { askHistory = []; vAsk(); });
+  pollAsk();
+}
+async function startAsk(q) {
+  if (!q.trim()) return;
+  const key = $("#askkey") ? $("#askkey").value.trim() : "";
+  try {
+    $("#askgo").disabled = true;
+    await api("/api/ask", { question: q, history: askHistory.map((x) => ({ question: x.question, answer: x.answer })), apiKey: key });
+    if (key) askKeyGiven = true;
+    $("#askq").value = "";
+    if ($("#askkey")) $("#askkey").remove();
+    pollAsk();
+  } catch (e) { $("#askgo").disabled = false; $("#askrun").innerHTML = '<div class="note err">' + esc(e.message) + "</div>"; }
+}
+async function pollAsk() {
+  clearTimeout(askPoll);
+  if (view !== "ask") return;
+  const j = await api("/api/ask/status");
+  if (!j.question) return;
+  if (j.running) {
+    $("#askrun").innerHTML = '<div class="q">' + esc(j.question) + '</div><div class="a"><p class="muted"><span class="spinner"></span> Claude is looking…</p><div class="log">' + esc(j.steps.map((s) => s.label).join("\n") || "Starting") + "</div></div>";
+    if ($("#askgo")) $("#askgo").disabled = true;
+    askPoll = setTimeout(pollAsk, 1000);
+    return;
+  }
+  const last = askHistory[askHistory.length - 1];
+  if (j.result && !(last && last.question === j.question && last.answer === j.result.answer)) { askHistory.push({ question: j.question, answer: j.result.answer, steps: j.steps }); return vAsk(); }
+  if (j.error && !(last && last.question === j.question)) $("#askrun").innerHTML = '<div class="q">' + esc(j.question) + '</div><div class="note err">' + esc(j.error) + "</div>";
+  if ($("#askgo")) $("#askgo").disabled = false;
+}
+
+// ---------- Error lookup
+function vError(text) {
+  $("#main").innerHTML = '<div class="view"><h1>Error lookup</h1><p class="lede">Paste an error message, a log line or a whole stack trace. Spelunk finds the code that raised it and where to start reading, even when the trace comes from a server or compiled code.</p>' +
+    '<form id="ef" class="askbox"><textarea class="field mono" id="et" rows="8" placeholder="TypeError: Cannot read properties of undefined (reading \'id\')&#10;    at updatePage (/app/dist/services/pages.js:158:3)" aria-label="Error or stack trace" style="font-size:12.5px"></textarea><div><button class="btn primary">Find the code</button></div></form><div id="er"></div></div>';
+  $("#ef").addEventListener("submit", (e) => { e.preventDefault(); runError($("#et").value); });
+  if (text) { $("#et").value = text; runError(text); }
+}
+async function runError(text) {
+  if (!text.trim()) return;
+  $("#er").innerHTML = '<p class="muted"><span class="spinner"></span></p>';
+  try {
+    const r = await api("/api/error", { text });
+    let h = r.message ? '<p class="mono" style="font-size:13px;margin-top:14px">' + esc(r.message) + "</p>" : "";
+    h += r.start ? '<div class="card start"><h4>Start here</h4><div>' + loc(r.start.path, r.start.line || 0) + (r.start.symbol ? " in <b>" + esc(r.start.symbol.name) + "()</b> " + traceBtn(r.start.symbol.name, "trace") : "") + '</div><p class="muted" style="font-size:13px;margin:6px 0 0">' + esc(r.start.why) + "</p></div>"
+      : '<div class="note">This did not match code in the project. Paste more of the stack trace, or search for words from the message in <button class="lnk" data-find="' + esc((r.message || text).slice(0, 80)) + '">Find</button>.</div>';
+    if (r.origins.length) h += "<h3>Where this message comes from</h3>" + r.origins.map((o) => '<div class="hit"><span class="tag">' + o.kind + "</span><div>" + loc(o.path, o.line) + (o.symbol ? ' <span class="muted">in ' + esc(o.symbol.name) + "()</span>" : "") + '<div class="why mono" style="font-size:12px">' + esc(o.text.slice(0, 200)) + "</div></div></div>").join("");
+    const ours = r.frames.filter((f) => f.file);
+    if (ours.length) h += "<h3>Stack frames in this project</h3><p class=\"muted\" style=\"font-size:13px\">Innermost first. " + (r.frames.length - ours.length) + " frames in libraries or the runtime are hidden.</p>" + ours.map((f) => "<div>" + loc(f.file, f.line || 0) + " " + (f.symbol ? "<b>" + esc(f.symbol.name) + "</b>" : f.fn ? '<span class="muted">' + esc(f.fn) + "</span>" : "") + "</div>").join("");
+    if (r.callers.length) h += "<h3>Files that call into it</h3>" + r.callers.map((c) => "<div>" + loc(c) + "</div>").join("");
+    if (r.risks.length) h += "<h3>Risks in these files</h3>" + r.risks.map((x) => '<div class="risk sev-' + x.severity + '"><span class="pill ' + x.severity + '">' + x.severity + "</span> " + esc(x.title) + "<div>" + x.locations.slice(0, 3).map((l) => loc(l.path, l.line)).join(" · ") + "</div></div>").join("");
+    $("#er").innerHTML = h;
+  } catch (e) { $("#er").innerHTML = '<div class="note err">' + esc(e.message) + "</div>"; }
+}
+
+// ---------- Changes (impact)
+function vChanges() {
+  $("#main").innerHTML = '<div class="view"><h1>Changes</h1><p class="lede">What the current branch touches compared with the main branch: the functions it edits, what depends on them, the pages and API calls to re-check, and the tests to run.</p>' +
+    '<form id="cf" class="searchrow"><input class="field" id="cb" placeholder="Compare with (default: the main branch)" aria-label="Branch or commit to compare with" style="max-width:360px"><label class="tick" style="margin:0"><input type="checkbox" id="cw"> Include uncommitted edits</label><button class="btn primary">Show changes</button></form><div id="cr"></div></div>';
+  $("#cf").addEventListener("submit", (e) => { e.preventDefault(); runChanges(); });
+  runChanges();
+}
+async function runChanges() {
+  $("#cr").innerHTML = '<p class="muted"><span class="spinner"></span> Comparing…</p>';
+  try {
+    const i = await api("/api/impact?base=" + encodeURIComponent($("#cb").value) + ($("#cw").checked ? "&working=1" : ""));
+    if (!$("#cb").value) $("#cb").placeholder = "Compare with: " + i.base;
+    if (!i.files.length) { $("#cr").innerHTML = '<p class="empty">No changes between ' + esc(i.head) + " and " + esc(i.base) + ".</p>"; return; }
+    let h = '<div class="stats"><span><b>' + i.files.length + "</b> files changed</span><span><b>" + i.dependents.length + "</b> depend on them</span><span><b>" + i.routes.length + "</b> routes to re-check</span><span><b>" + i.tests.length + "</b> tests to run</span></div>";
+    if (i.untested.length) h += '<div class="note err">No test reaches ' + i.untested.slice(0, 8).map((p) => loc(p)).join(", ") + (i.untested.length > 8 ? " and " + (i.untested.length - 8) + " more" : "") + ". Check these by hand.</div>";
+    h += '<h2>Changed</h2><div class="tw"><table><tr><th>File</th><th>Change</th><th>Functions touched</th></tr>' + i.files.slice(0, 200).map((f) => "<tr><td>" + (f.inIndex ? loc(f.path) : '<span class="mono" style="font-size:12.5px">' + esc(f.path) + "</span>") + '</td><td><span class="tag">' + f.status + "</span></td><td>" + f.symbols.slice(0, 10).map((s) => loc(f.path, s.line, (s.parent ? s.parent + "." : "") + s.name)).join(", ") + (f.symbols.length > 10 ? " …" : "") + "</td></tr>").join("") + "</table></div>";
+    if (i.routes.length) h += '<h2>Routes to re-check</h2><div class="tw"><table>' + i.routes.map((r) => '<tr><td><span class="tag">' + esc(r.method) + '</span></td><td class="mono" style="font-size:12.5px">' + esc(r.path) + "</td><td>" + loc(r.file, r.line) + '</td><td class="muted">' + esc(r.reason) + "</td></tr>").join("") + "</table></div>";
+    if (i.tests.length) h += "<h2>Tests to run</h2>" + i.tests.slice(0, 60).map((t) => "<div>" + loc(t.path) + ' <span class="muted" style="font-size:13px">' + esc(t.reason) + "</span></div>").join("");
+    if (i.modules.length) h += '<h2>Parts affected</h2><div class="tw"><table><tr><th>Part</th><th>Files changed</th><th>Files depending</th></tr>' + i.modules.map((m) => '<tr><td><button class="lnk" data-module="' + esc(m.path) + '">' + esc(m.path || "(root)") + "</button></td><td>" + m.changed + "</td><td>" + m.affected + "</td></tr>").join("") + "</table></div>";
+    if (i.dependents.length) h += "<h2>Depends on the change</h2>" + i.dependents.filter((d) => d.depth === 1).slice(0, 40).map((d) => "<div>" + loc(d.path) + ' <span class="muted" style="font-size:13px">imports ' + esc(d.via) + "</span></div>").join("") + (i.dependents.some((d) => d.depth > 1) ? '<p class="muted" style="font-size:13px">And ' + i.dependents.filter((d) => d.depth > 1).length + " more through those.</p>" : "");
+    if (i.env.length) h += "<h2>Settings read in the changed lines</h2>" + i.env.map((e) => "<div><code>" + esc(e.name) + "</code> " + loc(e.path, e.line) + "</div>").join("");
+    if (i.risks.length) h += "<h2>Risks in the changed lines</h2>" + i.risks.slice(0, 30).map((x) => '<div class="risk sev-' + x.severity + '"><span class="pill ' + x.severity + '">' + x.severity + "</span> " + esc(x.title) + "<div>" + x.locations.slice(0, 3).map((l) => loc(l.path, l.line)).join(" · ") + "</div></div>").join("");
+    $("#cr").innerHTML = h;
+  } catch (e) { $("#cr").innerHTML = '<div class="note err">' + esc(e.message) + "</div>"; }
+}
+
+// ---------- Share (Elemnt)
+async function vShare() {
+  const d = await api("/api/publish/defaults").catch(() => ({ url: "", space: "", hasToken: false }));
+  const slug = report.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
+  $("#main").innerHTML = '<div class="view"><h1>Share the map</h1><p class="lede">Publish this map as a page in Elemnt so your team can read it without installing anything. Publishing again updates the same page, and Elemnt keeps every version.</p>' +
+    '<form id="sf" class="card" style="max-width:640px;display:grid;gap:8px">' +
+    '<label>Elemnt address<input class="field" id="su" value="' + esc(d.url) + '" placeholder="https://docs.yourcompany.com" style="display:block;width:100%;max-width:none"></label>' +
+    '<label>Space<input class="field" id="ss" value="' + esc(d.space) + '" placeholder="e.g. eng" style="display:block;width:100%;max-width:none"></label>' +
+    '<label>Page path<input class="field" id="sp" value="codebase/' + esc(slug) + '" style="display:block;width:100%;max-width:none"></label>' +
+    '<label>API token' + (d.hasToken ? ' <span class="muted">(using ELEMNT_TOKEN)</span>' : "") + '<input class="field" id="st" type="password" autocomplete="off" placeholder="' + (d.hasToken ? "Leave empty to use ELEMNT_TOKEN" : "elm_…, from Elemnt settings") + '" style="display:block;width:100%;max-width:none"></label>' +
+    '<label class="tick"><input type="checkbox" id="sd"> Save as a draft to review first</label>' +
+    '<div><button class="btn primary" id="sgo">Publish to Elemnt</button></div><p class="muted" style="font-size:12.5px;margin:0">The token is used for this request only and is not saved.</p></form><div id="sr" style="margin-top:12px"></div>' +
+    '<h2>Keep it up to date</h2><p>Run the same thing in CI on every merge to main. Templates for GitHub Actions and Bitbucket Pipelines are in the Spelunk repository under <code>examples/ci</code>; the job runs:</p><div class="log">npx spelunk-cli publish --space ' + esc(d.space || "eng") + " --path codebase/" + esc(slug) + "\n# with ELEMNT_URL and ELEMNT_TOKEN set as CI secrets</div></div>";
+  $("#sf").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    $("#sgo").disabled = true;
+    $("#sr").innerHTML = '<p class="muted"><span class="spinner"></span> Publishing…</p>';
+    try {
+      const r = await api("/api/publish", { url: $("#su").value, space: $("#ss").value, path: $("#sp").value, token: $("#st").value, draft: $("#sd").checked });
+      $("#st").value = "";
+      $("#sr").innerHTML = '<div class="note">' + (r.action === "unchanged" ? "Already up to date." : r.action === "created" ? "Published." : "Updated.") + ' <a target="_blank" rel="noopener noreferrer" href="' + esc(r.url) + '">' + esc(r.url) + " ↗</a></div>";
+    } catch (err) { $("#sr").innerHTML = '<div class="note err">' + esc(err.message) + "</div>"; }
+    $("#sgo").disabled = false;
+  });
+}
+
+// ---------- Clone from a link
+async function useLink() {
+  const url = $("#cloneurl").value.trim();
+  if (!url) return;
+  const tok = $("#clonetok").value;
+  $("#picker").close();
+  state.root = url;
+  report = null;
+  renderTop();
+  view = "overview";
+  renderNav();
+  $("#main").innerHTML = '<div class="view empty"><span class="spinner"></span> Downloading ' + esc(url) + ' and reading it… Large repositories take a minute.</div>';
+  try {
+    const r = await api("/api/clone", { url, token: tok });
+    $("#clonetok").value = "";
+    state.root = r.root;
+    renderTop();
+    await refresh();
+  } catch (e) { state.root = null; renderTop(); $("#main").innerHTML = '<div class="view"><div class="note err">' + esc(e.message) + '</div><button class="btn" data-pick>Try again</button></div>'; }
+}
+
 // ---------- File drawer
 async function openFile(path, line) {
   $("#drawer").classList.add("open");
@@ -439,6 +662,8 @@ document.addEventListener("click", async (e) => {
     if (d.trace !== undefined) { closeFile(); view = "trace"; renderNav(); return vTrace(d.trace); }
     if (d.find !== undefined) { view = "find"; renderNav(); return vFind(d.find); }
     if (d.q !== undefined) { $("#q").value = d.q; return search(d.q); }
+    if (d.ask !== undefined) { $("#askq").value = d.ask; return startAsk(d.ask); }
+    if (t.id === "clonego") return useLink();
     if (d.view) return go(d.view);
     if (d.module !== undefined) return vModule(d.module);
     if (d.kind !== undefined) { riskKind = d.kind; return vRisks(); }
@@ -454,6 +679,7 @@ $("#scrim").addEventListener("click", closeFile);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeFile(); if (e.key === "/" && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); go("find"); } });
 $("#pickform").addEventListener("submit", (e) => { e.preventDefault(); useFolder($("#pickpath").value || pickerDir); });
 $("#browse").addEventListener("click", () => openPicker($("#pickpath").value));
+$("#cloneurl").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); useLink(); } });
 try { const th = localStorage.getItem("spelunk-theme"); if (th) document.documentElement.dataset.theme = th; } catch {}
 
 (async () => {
@@ -504,6 +730,11 @@ export function dashboardHtml(): string {
     <p class="muted" id="pickhint" style="margin:0;font-size:13px"></p>
     <div class="dirs" id="dirs"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button><button class="btn primary">Use this folder</button></div>
+    <div class="orline">or paste a repository link</div>
+    <input class="field" id="cloneurl" placeholder="https://github.com/owner/repo, https://bitbucket.org/team/repo, …" aria-label="Repository link" autocomplete="off" style="max-width:none">
+    <input class="field" id="clonetok" type="password" placeholder="Access token, only for private repositories" aria-label="Access token" autocomplete="off" style="max-width:none">
+    <p class="muted" style="margin:0;font-size:12.5px">The token is used for this download only and is never saved. Spelunk keeps the copy in ~/.spelunk/repos.</p>
+    <div style="display:flex;justify-content:flex-end"><button type="button" class="btn" id="clonego">Download and open</button></div>
   </form>
 </dialog>
 <script>${JS}</script>

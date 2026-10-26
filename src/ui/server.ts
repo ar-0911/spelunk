@@ -5,13 +5,20 @@ import { createServer, type IncomingMessage, type ServerResponse } from "node:ht
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { RISK_INFO } from "../analysis/risks.js";
+import { ask, ClaudeAsk, type AskResult, type AskStep } from "../explain/ask.js";
 import { Claude, ClaudeError, estimateCost, MODEL } from "../explain/claude.js";
 import { explain, plan } from "../explain/explain.js";
+import { formatOverview } from "../format.js";
+import { lookupError } from "../query/errors.js";
+import { defaultBase, gitDiff, impact } from "../query/impact.js";
 import { resolveTarget, trace } from "../query/trace.js";
 import { where } from "../query/where.js";
 import { diagramSvg } from "../report/diagram.js";
+import { publishToElemnt, renderElemnt } from "../report/elemnt.js";
 import { renderHtml } from "../report/html.js";
 import { buildReport, type Report } from "../report/model.js";
+import { buildTour } from "../report/tour.js";
+import { cloneRepo } from "../scan/clone.js";
 import { openWorkspace, type Workspace } from "../workspace.js";
 import { dashboardHtml } from "./page.js";
 
@@ -36,6 +43,14 @@ interface ExplainJob {
   summary?: string;
 }
 
+interface AskJob {
+  running: boolean;
+  question: string;
+  steps: AskStep[];
+  result?: AskResult;
+  error?: string;
+}
+
 class HttpError extends Error {
   constructor(
     readonly status: number,
@@ -54,6 +69,9 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
   let report: Report | undefined;
   let scanning: Promise<Workspace> | undefined;
   let job: ExplainJob | undefined;
+  let askJob: AskJob | undefined;
+  // A key pasted for Ask is kept in memory for this session only, so follow-up questions don't ask again.
+  let askKey: string | undefined;
 
   const load = async (refresh: boolean): Promise<Workspace> => {
     if (!root) throw new HttpError(409, "Pick a folder first.");
@@ -93,6 +111,24 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
       ws = undefined;
       report = undefined;
       job = undefined;
+      askJob = undefined;
+      await load(true);
+      return { root };
+    },
+
+    "POST /api/clone": async (_q, body) => {
+      const link = typeof body.url === "string" ? body.url.trim() : "";
+      if (!link) throw new HttpError(400, "Paste a repository link.");
+      // The token is used for this clone only: never stored, logged or sent back.
+      const gitToken = typeof body.token === "string" && body.token.trim() ? body.token.trim() : undefined;
+      const dir = await cloneRepo(link, gitToken ? { token: gitToken } : {}).catch((err: unknown) => {
+        throw new HttpError(400, err instanceof Error ? err.message : String(err));
+      });
+      root = dir;
+      ws = undefined;
+      report = undefined;
+      job = undefined;
+      askJob = undefined;
       await load(true);
       return { root };
     },
@@ -151,6 +187,70 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
     },
 
     "GET /api/risk-info": async () => RISK_INFO,
+
+    "GET /api/tour": async () => buildTour(await getReport()),
+
+    "POST /api/error": async (_q, body) => {
+      const w = await load(false);
+      const input = typeof body.text === "string" ? body.text : "";
+      if (!input.trim()) throw new HttpError(400, "Paste an error message or stack trace.");
+      return lookupError(w.index, w.graph, input, await w.risks());
+    },
+
+    "GET /api/impact": async (q) => {
+      const w = await load(false);
+      const base = q.get("base")?.trim() || (await defaultBase(w.index.root));
+      const working = q.get("working") === "1";
+      const diff = await gitDiff(w.index.root, base, working ? { includeWorkingTree: true } : {}).catch((err: unknown) => {
+        throw new HttpError(400, err instanceof Error ? err.message : String(err));
+      });
+      return impact(w.index, w.graph, diff, await w.risks(), { base, head: working ? "working tree" : "HEAD" });
+    },
+
+    "POST /api/ask": async (_q, body) => {
+      const w = await load(false);
+      if (askJob?.running) throw new HttpError(409, "Claude is still answering the last question.");
+      const question = typeof body.question === "string" ? body.question.trim().slice(0, 2000) : "";
+      if (!question) throw new HttpError(400, "Type a question.");
+      if (typeof body.apiKey === "string" && body.apiKey.trim()) askKey = body.apiKey.trim();
+      if (!askKey && !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) throw new HttpError(400, "Paste an Anthropic API key, or start Spelunk with ANTHROPIC_API_KEY set.");
+      const history = Array.isArray(body.history)
+        ? (body.history as { question?: unknown; answer?: unknown }[]).slice(-6).flatMap((h) => (typeof h.question === "string" && typeof h.answer === "string" ? [{ question: h.question, answer: h.answer }] : []))
+        : [];
+      const r = await getReport();
+      const current: AskJob = { running: true, question, steps: [] };
+      askJob = current;
+      void ask(w, new ClaudeAsk(askKey), question, { history, overview: formatOverview(r), onStep: (s) => current.steps.push(s) })
+        .then((result) => {
+          current.result = result;
+        })
+        .catch((err: unknown) => {
+          current.error = err instanceof Error ? err.message : String(err);
+        })
+        .finally(() => {
+          current.running = false;
+        });
+      return { started: true };
+    },
+
+    "GET /api/ask/status": async () => askJob ?? { running: false, steps: [] },
+
+    "POST /api/publish": async (_q, body) => {
+      const r = await getReport();
+      const str = (k: string) => (typeof body[k] === "string" ? (body[k] as string).trim() : "");
+      const url = str("url") || process.env.ELEMNT_URL || "";
+      const elemntToken = str("token") || process.env.ELEMNT_TOKEN || "";
+      const space = str("space") || process.env.ELEMNT_SPACE || "";
+      if (!url || !elemntToken || !space) throw new HttpError(400, "Fill in the Elemnt address, an API token and the space.");
+      const slug = r.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
+      try {
+        return await publishToElemnt(renderElemnt(r), { url, token: elemntToken, space, path: str("path") || `codebase/${slug}`, draft: body.draft === true, message: `Spelunk map${r.commit ? ` at ${r.commit.slice(0, 10)}` : ""}` });
+      } catch (err) {
+        throw new HttpError(400, err instanceof Error ? err.message : String(err));
+      }
+    },
+
+    "GET /api/publish/defaults": async () => ({ url: process.env.ELEMNT_URL ?? "", space: process.env.ELEMNT_SPACE ?? "", hasToken: Boolean(process.env.ELEMNT_TOKEN) }),
 
     "GET /api/explain/plan": async () => {
       const w = await load(false);

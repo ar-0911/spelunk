@@ -44,10 +44,17 @@ spelunk ui
 This opens Spelunk in your browser. Choose a project folder and click around:
 
 - **Overview**: what the project is, where the program starts, which files to read first, how to run it, a diagram of how the parts connect, and every part with its summary.
+- **First day**: a guided walk through the project in about ten steps, each naming the files to open in order. Tick steps off; progress is kept in your browser.
 - **Find**: type plain words ("send email", "payment failed") and jump to the code.
+- **Ask**: ask a question in plain words. Claude searches and reads the code and answers with links to the lines it used.
 - **Trace**: pick a web address or function and see who calls it and what it calls.
+- **Error lookup**: paste an error or a whole stack trace and get the line that raised it, even from a server or compiled code.
+- **Changes**: what your branch touches compared with main: functions edited, what depends on them, routes to re-check, tests to run.
 - **Risks**, **Routes**, **Config** and **Debugging**: the same findings as the CLI, as pages.
 - **Explain with Claude**: shows the cost, takes an API key for that run only, and adds Claude's explanations to every page.
+- **Share**: publish the map as a page in Elemnt.
+
+You can also paste a GitHub, GitLab or Bitbucket link instead of choosing a folder; Spelunk downloads it (with an access token for private repositories, used once and never saved).
 
 Click any `path:line` to read the code there, with a "What's in it" tab listing the file's functions, imports, settings and errors.
 
@@ -55,7 +62,7 @@ The dashboard runs on your machine at `127.0.0.1` only. It prints a link with a 
 
 ## Commands
 
-Run these inside the repository you want to understand, or pass `-C <dir>`.
+Run these inside the repository you want to understand, or pass `-C <dir>`. `-C` also takes a repository link (see below).
 
 | Command | What you get |
 |---|---|
@@ -66,11 +73,49 @@ Run these inside the repository you want to understand, or pass `-C <dir>`.
 | `spelunk module <dir>` | One module: files ranked by how much they're imported, dependencies, and Claude's summary. |
 | `spelunk routes [filter]` | Every HTTP route and the client calls that hit it. |
 | `spelunk risks [--kind k]` | Places bugs hide: swallowed errors, calls to routes that don't exist, import cycles, duplicated code, hotspots, long functions, untested modules, dead files, undocumented env vars, TODOs. |
+| `spelunk error "<text>"` | Paste an error message or stack trace (or pipe one in: `pbpaste \| spelunk error`). Maps frames to files and functions, even from absolute container paths or compiled `dist/` output, and finds the throw or log statement that produces the message. |
+| `spelunk impact [base]` | What the current branch changes compared with `base` (default: the remote's main branch): changed functions, files that depend on them, routes whose handlers reach the change, tests to run, changed files no test reaches, and risks in the changed lines. Markdown, so it fits a PR comment. `--working` includes uncommitted edits. |
+| `spelunk tour` | A first-day walkthrough: what it is, how to run it, the settings it needs, the big parts, one request end to end, the core files, where bugs hide, how to debug and test. |
+| `spelunk ask "<question>"` | Claude answers from the code: it searches, traces and reads line ranges through Spelunk's index (not the whole repo), and cites `path:line` for each claim. Needs `ANTHROPIC_API_KEY`; a question usually costs a few cents. |
+| `spelunk publish` | Publishes the map as one Elemnt page, creating it or updating it in place. See [Share the map in Elemnt](#share-the-map-in-elemnt). |
 | `spelunk explain` | Asks Claude for module summaries, main flows, a run-it-locally guide, a debugging guide and a glossary. Prints the estimated cost and does nothing until you add `--yes`. |
 | `spelunk ui` | The dashboard, above. `--port` to pick a port, `--no-open` to just print the link. |
 | `spelunk scan` | Re-index. Every command already rescans incrementally (only changed files are re-parsed), so you rarely need this. |
 
-`where`, `trace` and `risks` take `--json`.
+`where`, `trace`, `risks`, `error`, `impact`, `tour` and `ask` take `--json`.
+
+## Open a repository by link
+
+```sh
+spelunk -C https://github.com/owner/repo map
+spelunk -C https://bitbucket.org/team/repo/src/develop/ tour      # a branch in the link is checked out
+spelunk -C https://git.acme.com/projects/PAY/repos/ledger/browse ui
+```
+
+GitHub, GitLab (including nested groups), Bitbucket Cloud, Bitbucket Data Center and Gitea links work, as do `git@host:owner/repo.git` SSH addresses. The copy lives in `~/.spelunk/repos` and is updated on the next run. For private repositories pass `--git-token`, or set `GITHUB_TOKEN`, `GITLAB_TOKEN`, `BITBUCKET_TOKEN` (an app password as `user:password` also works) or `SPELUNK_GIT_TOKEN`. The token goes to git as a header for that command only; it isn't written into the clone's config.
+
+## Big repositories
+
+Spelunk is built to stay usable on repositories with tens of thousands of files:
+
+- Parsing runs on every core (up to 8 worker threads) once there are more than a few hundred files to read. `--workers <n>` overrides it.
+- The index is JSON Lines, streamed to disk, so a large index never has to fit in one string. Later scans only re-parse files whose content changed.
+- In a monorepo, `spelunk scan --only services/billing,packages/shared` reads just those folders. The choice is remembered for later commands; `--only .` goes back to the whole repository.
+
+On a 4-core machine, VS Code (18,700 files) indexes in about a minute and Django (3,500 files) in 10 to 15 seconds. After the first query, searches answer in well under a second.
+
+## Share the map in Elemnt
+
+`spelunk publish` turns the map into an [Elemnt](https://github.com/ar-0911/elemnt) page: a hero with the headline numbers, the architecture diagram, cards for the main parts, sortable tables of commands, routes, settings and tests, and collapsible detail for every module and risk. Running it again updates the same page (Elemnt keeps the history), and does nothing when the map hasn't changed.
+
+```sh
+export ELEMNT_URL=https://docs.example.com ELEMNT_TOKEN=elm_...
+spelunk publish --space eng                    # → /s/eng/codebase/<repo>
+spelunk publish --space eng --path maps/api --draft
+spelunk publish --dry-run > map.md             # just print the page source
+```
+
+To keep it current, run it in CI on every merge to main. [`examples/ci`](examples/ci) has a GitHub Actions workflow and a Bitbucket Pipelines file that publish on merge and add `spelunk impact` to every pull request. The dashboard's Share page does the same with a form.
 
 ## With Claude Code (MCP)
 
@@ -78,7 +123,7 @@ Run these inside the repository you want to understand, or pass `-C <dir>`.
 claude mcp add spelunk -- spelunk mcp
 ```
 
-Claude Code starts the server in your project directory. It gets these tools: `overview`, `where`, `trace`, `file`, `module`, `dependencies`, `dependents`, `symbols`, `routes`, `env_vars`, `risks` and `rescan`. They answer from the index instead of reading whole files, so Claude spends fewer tokens finding its way around. The index rescans itself when it's more than 20 seconds old, so Claude sees its own edits.
+Claude Code starts the server in your project directory. It gets these tools: `overview`, `where`, `trace`, `file`, `module`, `dependencies`, `dependents`, `symbols`, `routes`, `env_vars`, `risks`, `lookup_error`, `impact`, `onboarding_tour` and `rescan`. They answer from the index instead of reading whole files, so Claude spends fewer tokens finding its way around. The index rescans itself when it's more than 20 seconds old, so Claude sees its own edits.
 
 For other MCP clients, run `spelunk mcp -C /path/to/repo` as a stdio server.
 
@@ -106,14 +151,15 @@ Project files: package.json, pyproject.toml, requirements.txt, setup.py, go.mod,
 ## How it works
 
 ```
-scan     walk files (git ls-files when it's a repo) → tree-sitter → symbols, imports, calls
+scan     walk files (git ls-files when it's a repo) → tree-sitter on a worker pool → symbols, imports, calls
          + line patterns → routes, env vars, errors, logs, TODOs, entry points
          + manifests → commands, dependencies, documented env vars
          → resolve imports to files → .spelunk/index.jsonl
 analyse  file graph → modules (directories, folded to ≤ 40) → risks, route matching
 query    where (BM25 with synonyms) · trace (call trees from call sites + definitions)
 explain  per-module prompts → Claude → overview prompt → .spelunk/explain.json
-report   HTML / Markdown / MCP / terminal / dashboard, all from the same Report model
+ask      Claude with search / trace / outline / read tools over the index → answer with path:line
+report   HTML / Markdown / Elemnt / MCP / terminal / dashboard, all from the same Report model
 ```
 
 Everything lives in `.spelunk/` inside the repository, with its own `.gitignore`, so nothing lands in your commits.

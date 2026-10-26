@@ -27,6 +27,24 @@ describe("dashboard server", async () => {
     expect(t.traces[0]!.flow[0]!.name).toBe("saveNote");
   });
 
+  it("looks up errors, builds the tour, and refuses ask, publish and clone without what they need", async () => {
+    const post = (path: string, body: unknown) => fetch(base + path, { method: "POST", headers: { "x-spelunk-token": token, "content-type": "application/json" }, body: JSON.stringify(body) });
+    const e = (await (await post("/api/error", { text: "Error: text is required" })).json()) as { start: { path: string } };
+    expect(e.start.path).toBe("src/services/notes.ts");
+    const tour = (await (await get("/api/tour")).json()) as { id: string }[];
+    expect(tour[0]!.id).toBe("what");
+    const saved = process.env.ANTHROPIC_API_KEY;
+    delete process.env.ANTHROPIC_API_KEY;
+    expect((await post("/api/ask", { question: "how?" })).status).toBe(400);
+    if (saved) process.env.ANTHROPIC_API_KEY = saved;
+    expect((await post("/api/publish", { url: "https://docs.example.com" })).status).toBe(400);
+    const c = await post("/api/clone", { url: "file:///etc" });
+    expect(c.status).toBe(400);
+    expect(((await c.json()) as { error: string }).error).toMatch(/doesn't look like a repository link/);
+    // The temp repo isn't a git repository, so impact explains rather than crashing.
+    expect((await get("/api/impact")).status).toBe(400);
+  });
+
   it("only reads files that are in the index", async () => {
     const ok = (await (await get("/api/file?path=src/db.ts")).json()) as { source: string };
     expect(ok.source).toContain("DATABASE_URL");
