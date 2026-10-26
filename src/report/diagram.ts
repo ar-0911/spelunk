@@ -29,7 +29,8 @@ export function moduleLayers(mods: Report["modules"]): string[][] {
 
 const short = (p: string) => (p ? (p.length > 30 ? `…${p.slice(-29)}` : p) : "(root)");
 
-export function diagramSvg(mods: Report["modules"]): string {
+/** `agents`: module path → names of the Braid agents changing it, drawn as a badge on the box. */
+export function diagramSvg(mods: Report["modules"], agents?: Map<string, string[]>): string {
   if (!mods.length) return "";
   const layers = moduleLayers(mods);
   const W = 1000;
@@ -76,7 +77,13 @@ export function diagramSvg(mods: Report["modules"]): string {
   const boxes = mods.map((m) => {
     const p = pos.get(m.path)!;
     const fill = Math.round(8 + (lines.get(m.path)! / maxLines) * 30);
-    return `<a href="#mod-${encodeURIComponent(m.path || "root")}"><g class="sp-node"><rect x="${p.x}" y="${p.y}" width="${boxW}" height="${boxH}" rx="7" fill="color-mix(in srgb, var(--accent) ${fill}%, var(--panel))" stroke="var(--line-strong)"/><text x="${p.x + 10}" y="${p.y + 19}" font-size="12.5" font-weight="600" fill="var(--ink)">${esc(short(m.path))}</text><text x="${p.x + 10}" y="${p.y + 36}" font-size="11" fill="var(--muted)">${m.files.length} files · ${m.lines.toLocaleString("en")} lines</text><title>${esc(m.path || "(root)")}</title></g></a>`;
+    const who = agents?.get(m.path) ?? [];
+    const badge = who.length
+      ? `<g class="sp-agents"><rect x="${p.x + boxW - 30}" y="${p.y - 9}" width="38" height="18" rx="9" fill="${who.length > 1 ? "var(--warn, #b7791f)" : "var(--accent)"}"/><text x="${p.x + boxW - 11}" y="${p.y + 4}" font-size="11" font-weight="700" text-anchor="middle" fill="#fff">${who.length}◆</text></g>`
+      : "";
+    const stroke = who.length ? `stroke="${who.length > 1 ? "var(--warn, #b7791f)" : "var(--accent)"}" stroke-width="2"` : 'stroke="var(--line-strong)"';
+    const tip = who.length ? `${m.path || "(root)"}: changed by ${who.join(", ")}` : m.path || "(root)";
+    return `<a href="#mod-${encodeURIComponent(m.path || "root")}"><g class="sp-node"><rect x="${p.x}" y="${p.y}" width="${boxW}" height="${boxH}" rx="7" fill="color-mix(in srgb, var(--accent) ${fill}%, var(--panel))" ${stroke}/><text x="${p.x + 10}" y="${p.y + 19}" font-size="12.5" font-weight="600" fill="var(--ink)">${esc(short(m.path))}</text><text x="${p.x + 10}" y="${p.y + 36}" font-size="11" fill="var(--muted)">${m.files.length} files · ${m.lines.toLocaleString("en")} lines</text>${badge}<title>${esc(tip)}</title></g></a>`;
   });
   return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Module dependency diagram" style="min-width:720px"><defs><marker id="sp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--edge)"/></marker></defs>${edges.join("")}${boxes.join("")}</svg>`;
 }

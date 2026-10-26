@@ -9,8 +9,9 @@ import { ask, ClaudeAsk, type AskResult, type AskStep } from "../explain/ask.js"
 import { Claude, ClaudeError, MODEL, costText } from "../explain/claude.js";
 import { explain, plan } from "../explain/explain.js";
 import { formatOverview } from "../format.js";
+import { agentMarks, agentsOnMap, braidHere, braidInstalled, braidState, errorTask, riskTask, startBraid } from "../integrations/braid.js";
 import { lookupError } from "../query/errors.js";
-import { defaultBase, gitDiff, impact } from "../query/impact.js";
+import { defaultBase, gitDiff, impact, mergeBase } from "../query/impact.js";
 import { resolveTarget, trace } from "../query/trace.js";
 import { where } from "../query/where.js";
 import { diagramSvg } from "../report/diagram.js";
@@ -116,6 +117,16 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
   };
 
   // The folder picker's reach: the home folder, cloned repos, and the folder `spelunk ui` started in.
+  // Braid: is it set up in the open folder (agents to show), and can tasks be handed to it?
+  let braidCli: Promise<boolean> | undefined;
+  const braidInfo = async () => {
+    const here = root ? await braidHere(root) : false;
+    const installed = await (braidCli ??= braidInstalled());
+    // A downloaded copy in ~/.spelunk/repos is reset on the next open, which would throw agents' work away.
+    const downloaded = root ? await within(reposDir(), root) : false;
+    return { here, canStart: installed && Boolean(root) && !downloaded, downloaded };
+  };
+
   const reachable = async (dir: string) =>
     options.allowAnyPath || (await within(homedir(), dir)) || (await within(reposDir(), dir)) || Boolean(options.root && (await within(options.root, dir)));
   const outside = (dir: string) => new HttpError(403, `${dir} is outside your home folder. Start Spelunk with --allow-any-path to open it.`);
@@ -128,6 +139,7 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
       hasEnvKey: Boolean(process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN),
       model: MODEL,
       home: homedir(),
+      braid: await braidInfo(),
     }),
 
     "POST /api/open": async (_q, body) => {
@@ -172,7 +184,37 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
 
     "GET /api/report": async () => {
       const r = await getReport();
-      return { ...r, diagram: diagramSvg(r.modules) };
+      const braid = root ? await braidState(root) : undefined;
+      return { ...r, diagram: diagramSvg(r.modules, braid && agentMarks(agentsOnMap(braid, r))) };
+    },
+
+    "GET /api/agents": async () => {
+      const state = root ? await braidState(root) : undefined;
+      if (!state) return { here: false };
+      return { here: true, ...agentsOnMap(state, await getReport()) };
+    },
+
+    "POST /api/braid/start": async (_q, body) => {
+      const info = await braidInfo();
+      if (info.downloaded) throw new HttpError(400, "This is a downloaded copy that Spelunk refreshes on the next open. Clone it yourself and open that folder to run agents on it.");
+      if (!info.canStart) throw new HttpError(400, "The braid command isn't installed. Get it from https://github.com/ar-0911/braid.");
+      const w = await load(false);
+      const str = (k: string) => (typeof body[k] === "string" ? (body[k] as string).trim() : "");
+      const tasks: string[] = [];
+      if (str("kind")) {
+        const picked = (await w.risks()).filter((r) => r.kind === str("kind")).slice(0, 30);
+        if (!picked.length) throw new HttpError(400, `No ${str("kind")} risks.`);
+        tasks.push(riskTask(picked));
+      }
+      if (str("error")) tasks.push(errorTask(str("error"), lookupError(w.index, w.graph, str("error"), await w.risks())));
+      if (Array.isArray(body.tasks)) tasks.push(...body.tasks.filter((t): t is string => typeof t === "string" && t.trim() !== "").map((t) => t.slice(0, 4000)));
+      const goal = str("goal").slice(0, 4000);
+      if (!tasks.length && !goal) throw new HttpError(400, "Say what the agents should do.");
+      try {
+        return await startBraid(w.index.root, goal && !tasks.length ? { goal, base: str("base") } : { tasks, base: str("base") });
+      } catch (err) {
+        throw new HttpError(400, err instanceof Error ? err.message : String(err));
+      }
     },
 
     "GET /api/where": async (q) => {
@@ -222,6 +264,20 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
     },
 
     "GET /api/impact": async (q) => {
+      const agentName = q.get("agent")?.trim();
+      if (agentName) {
+        // A Braid agent's work so far: its worktree, against where its branch split off, uncommitted edits included.
+        const state = root ? await braidState(root) : undefined;
+        const a = state?.agents.find((x) => x.name === agentName);
+        if (!a) throw new HttpError(404, `No Braid agent "${agentName}".`);
+        if (!(await stat(a.worktree).catch(() => undefined))) throw new HttpError(400, `${a.name}'s worktree is gone (${a.status}).`);
+        const aw = await openWorkspace(a.worktree, { refresh: true });
+        const base = (await mergeBase(a.worktree, a.base)) ?? a.base;
+        const diff = await gitDiff(a.worktree, base, { includeWorkingTree: true }).catch((err: unknown) => {
+          throw new HttpError(400, err instanceof Error ? err.message : String(err));
+        });
+        return { ...impact(aw.index, aw.graph, diff, await aw.risks(), { base: a.base, head: `${a.name} (with uncommitted edits)` }), agent: a.name };
+      }
       const w = await load(false);
       const base = q.get("base")?.trim() || (await defaultBase(w.index.root));
       const working = q.get("working") === "1";

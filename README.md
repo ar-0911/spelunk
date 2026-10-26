@@ -50,6 +50,7 @@ This opens Spelunk in your browser. Choose a project folder and click around:
 - **Trace**: pick a web address or function and see who calls it and what it calls.
 - **Error lookup**: paste an error or a whole stack trace and get the line that raised it, even from a server or compiled code.
 - **Changes**: what your branch touches compared with main: functions edited, what depends on them, routes to re-check, tests to run.
+- **Agents** (when the project runs [Braid](#with-braid)): what each agent is changing, on the map of the code, and where they're about to collide. **Fix with Braid** on Risks and Error lookup hands the finding to a new agent.
 - **Risks**, **Routes**, **Config** and **Debugging**: the same findings as the CLI, as pages.
 - **Explain with Claude**: shows the cost, takes an API key for that run only, and adds Claude's explanations to every page.
 - **Share**: publish the map as a page in Elemnt.
@@ -78,11 +79,13 @@ Run these inside the repository you want to understand, or pass `-C <dir>`. `-C`
 | `spelunk tour` | A first-day walkthrough: what it is, how to run it, the settings it needs, the big parts, one request end to end, the core files, where bugs hide, how to debug and test. |
 | `spelunk ask "<question>"` | Claude answers from the code: it searches, traces and reads line ranges through Spelunk's index (not the whole repo), and cites `path:line` for each claim. Needs `ANTHROPIC_API_KEY`; a question usually costs a few cents. |
 | `spelunk publish` | Publishes the map as one Elemnt page, creating it or updating it in place. See [Share the map in Elemnt](#share-the-map-in-elemnt). |
+| `spelunk overview` | The short version: languages, entry points, commands, and every module with what it depends on. `--json` too. |
+| `spelunk agents` | With [Braid](#with-braid): which parts of the code each agent is changing, and where they'll collide. |
 | `spelunk explain` | Asks Claude for module summaries, main flows, a run-it-locally guide, a debugging guide and a glossary. Prints the estimated cost and does nothing until you add `--yes`. |
 | `spelunk ui` | The dashboard, above. `--port` to pick a port, `--no-open` to just print the link. |
 | `spelunk scan` | Re-index. Every command already rescans incrementally (only changed files are re-parsed), so you rarely need this. |
 
-`where`, `trace`, `risks`, `error`, `impact`, `tour` and `ask` take `--json`.
+`where`, `trace`, `risks`, `error`, `impact`, `tour`, `ask`, `overview` and `agents` take `--json`. `impact --head <commit>` compares a commit other than `HEAD`. `spelunk facts` parses files sent as JSON on stdin, for other tools.
 
 ## Open a repository by link
 
@@ -123,9 +126,20 @@ To keep it current, run it in CI on every merge to main. [`examples/ci`](example
 claude mcp add spelunk -- spelunk mcp
 ```
 
-Claude Code starts the server in your project directory. It gets these tools: `overview`, `where`, `trace`, `file`, `module`, `dependencies`, `dependents`, `symbols`, `routes`, `env_vars`, `risks`, `lookup_error`, `impact`, `onboarding_tour` and `rescan`. They answer from the index instead of reading whole files, so Claude spends fewer tokens finding its way around. Before each answer the server checks `git status` and rescans only when something changed, reparsing just the changed files, so Claude sees its own edits without waiting on a scan every call. Outside git it rescans when the index is more than 20 seconds old.
+Claude Code starts the server in your project directory. It gets these tools: `overview`, `where`, `trace`, `file`, `module`, `dependencies`, `dependents`, `symbols`, `routes`, `env_vars`, `risks`, `lookup_error`, `impact`, `onboarding_tour`, `agents` (with Braid) and `rescan`. They answer from the index instead of reading whole files, so Claude spends fewer tokens finding its way around. Before each answer the server checks `git status` and rescans only when something changed, reparsing just the changed files, so Claude sees its own edits without waiting on a scan every call. Outside git it rescans when the index is more than 20 seconds old.
 
 For other MCP clients, run `spelunk mcp -C /path/to/repo` as a stdio server.
+
+## With Braid
+
+[Braid](https://github.com/ar-0911/braid) runs many coding agents on one repository at once, each on its own branch and worktree, and lands their work. Spelunk works without it. In a repository where Braid is set up, and with the `braid` command on your PATH, Spelunk adds:
+
+- **Agents on the map.** `spelunk agents` (and the dashboard's **Agents** page) shows which parts of the code each agent is changing, the parts more than one agent is in, and the collisions Braid predicts. The architecture diagram in `spelunk map` and the dashboard gets a badge on every part an agent is changing.
+- **One agent's changes.** `spelunk impact --agent <name>` (or the agent picker on **Changes**) compares that agent's worktree with where its branch split off, uncommitted edits included: functions edited, routes to re-check, tests to run.
+- **Fix with Braid.** `spelunk risks --kind swallowed-error --braid` starts one agent per kind of finding; `spelunk error "..." --braid` starts one to fix the bug behind an error. On the dashboard: the **Fix with Braid** buttons on **Risks** and **Error lookup**, and a goal box on **Agents** that runs `braid do`. Spelunk asks before starting anything.
+- **An `agents` MCP tool**, so an agent can see who else is in the module it is about to edit.
+
+Braid uses Spelunk in turn, when it finds it: for its planner, as MCP tools for every agent, for conflict checks (`spelunk facts`) and for the impact section of its approval messages (`spelunk impact --head <commit> --json`). The two talk only through each other's command line, so each installs and runs on its own. `SPELUNK_BRAID` sets the command (for example `python -m braid`); `SPELUNK_BRAID=off` turns this off.
 
 ## Claude explanations
 

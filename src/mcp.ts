@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { z } from "zod";
 import type { RiskKind } from "./analysis/risks.js";
 import { formatEnv, formatFile, formatHits, formatModule, formatOverview, formatRisks, formatRoutes, formatSkipped, formatTrace } from "./format.js";
+import { agentsOnMap, braidState, formatAgents } from "./integrations/braid.js";
 import { formatErrorLookup, lookupError } from "./query/errors.js";
 import { defaultBase, formatImpact, gitDiff, impact } from "./query/impact.js";
 import { resolveTarget, trace } from "./query/trace.js";
@@ -250,6 +251,19 @@ export function createServer(root: string): McpServer {
     async () => {
       const r = await report();
       return text(formatTour(r, buildTour(r)));
+    },
+  );
+
+  server.registerTool(
+    "agents",
+    {
+      description: "Only in repositories run with Braid (several coding agents at once): which parts of the code each Braid agent is changing, files included, the parts more than one agent is in, and the collisions Braid predicts. Use it before editing a shared module.",
+      annotations: readOnly,
+    },
+    async () => {
+      const state = await braidState(root);
+      if (!state) return text("Braid isn't running agents in this repository.");
+      return text(formatAgents(agentsOnMap(state, await report())));
     },
   );
 

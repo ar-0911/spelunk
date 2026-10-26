@@ -1,3 +1,4 @@
+import { agentMarks, type AgentsOnMap } from "../integrations/braid.js";
 import type { Index } from "../types.js";
 import type { CallNode } from "../query/trace.js";
 import { diagramSvg } from "./diagram.js";
@@ -126,7 +127,8 @@ footer { margin-top: 56px; padding-top: 18px; border-top: 1px solid var(--line);
 
 const LANG_COLORS = ["#2f7d5b", "#3b6fb6", "#b5672a", "#8a4fb0", "#c0414f", "#4c9a9a", "#9a8a2e", "#6b7280"];
 
-export function renderHtml(r: Report, index: Index): string {
+/** `agents`: Braid's agents when the map was made, shown on the diagram and in an "Agents at work" section. */
+export function renderHtml(r: Report, index: Index, agents?: AgentsOnMap): string {
   const link = (path: string, line?: number, label?: string) => {
     const url = sourceUrl(r, path, line);
     const text = esc(label ?? `${path}${line ? `:${line}` : ""}`);
@@ -137,6 +139,7 @@ export function renderHtml(r: Report, index: Index): string {
     ["start", "Start here"],
     ["run", "Run it"],
     ["architecture", "Architecture"],
+    ...(agents?.agents.some((a) => a.live) ? ([["agents", "Agents at work"]] as [string, string][]) : []),
     ["map", "Code map"],
     ["find", "Find anything"],
     ...(r.routes.length ? ([["routes", "Routes"]] as [string, string][]) : []),
@@ -179,7 +182,8 @@ export function renderHtml(r: Report, index: Index): string {
   parts.push(`</section>`);
 
   // Architecture
-  parts.push(`<section id="architecture"><h2>Architecture</h2>${o ? `<p>${prose(o.architecture)}</p>` : ""}<div class="figure">${diagramSvg(r.modules)}<div class="cap">Each box is a directory of source files; arrows point from a module to the modules it imports. Darker boxes hold more code. Dashed arrows point upwards and usually mean a cycle. Click a box to open it in the code map.</div></div></section>`);
+  parts.push(`<section id="architecture"><h2>Architecture</h2>${o ? `<p>${prose(o.architecture)}</p>` : ""}<div class="figure">${diagramSvg(r.modules, agents && agentMarks(agents))}<div class="cap">Each box is a directory of source files; arrows point from a module to the modules it imports. Darker boxes hold more code. Dashed arrows point upwards and usually mean a cycle.${agents?.modules.length ? " A badge counts the Braid agents changing that part; orange means more than one." : ""} Click a box to open it in the code map.</div></div></section>`);
+  if (agents?.agents.some((a) => a.live)) parts.push(agentsSection(agents, link));
 
   // Code map
   parts.push(`<section id="map"><h2>Code map</h2><p>${plural(r.modules.length, "module")}. Open one to see its files${o ? " and Claude's notes" : ""}.</p>`);
@@ -311,4 +315,15 @@ ${parts.join("\n")}
 </body>
 </html>
 `;
+}
+
+function agentsSection(m: AgentsOnMap, link: (path: string, line?: number, label?: string) => string): string {
+  const live = m.agents.filter((a) => a.live);
+  const rows = live
+    .map((a) => `<tr><td><b>${esc(a.name)}</b><div class="muted">${esc(a.status)}</div></td><td>${esc(a.task.slice(0, 160))}</td><td>${a.modules.map((p) => `<a href="#mod-${esc(encodeURIComponent(p || "root"))}"><code>${esc(p || "(root)")}</code></a>`).join(" ")}</td><td>${a.files.slice(0, 8).map((f) => link(f)).join(" ")}${a.files.length > 8 ? ` +${a.files.length - 8}` : ""}</td></tr>`)
+    .join("");
+  const risks = m.risks.length
+    ? `<h3>Predicted collisions</h3><ul>${m.risks.map((r) => `<li><span class="pill ${r.severity === "conflict" ? "high" : r.severity === "semantic" ? "medium" : "low"}">${esc(r.severity)}</span> <b>${esc(r.a)}</b> and <b>${esc(r.b)}</b>: ${r.files.slice(0, 6).map((f) => `<code>${esc(f)}</code>`).join(", ")}</li>`).join("")}</ul>`
+    : "";
+  return `<section id="agents"><h2>Agents at work</h2><p>${plural(live.length, "Braid agent")} were changing this code when the guide was made, landing on <code>${esc(m.base)}</code>. Run <code>spelunk agents</code> or open the dashboard for the live view.</p><div class="tw"><table><tr><th>Agent</th><th>Task</th><th>Parts</th><th>Files</th></tr>${rows}</table></div>${risks}</section>`;
 }

@@ -9,7 +9,9 @@ import { Claude, ClaudeError, MODEL, costText } from "./explain/claude.js";
 import { explain, explanationsPath, plan } from "./explain/explain.js";
 import { formatFile, formatHits, formatModule, formatOverview, formatRisks, formatRoutes, formatSkipped, formatTrace } from "./format.js";
 import { formatErrorLookup, lookupError } from "./query/errors.js";
-import { defaultBase, formatImpact, gitDiff, impact } from "./query/impact.js";
+import { agentsOnMap, braidState, errorTask, formatAgents, riskTask, startBraid } from "./integrations/braid.js";
+import { parseFiles } from "./integrations/facts.js";
+import { defaultBase, formatImpact, gitDiff, impact, mergeBase } from "./query/impact.js";
 import { resolveTarget, trace } from "./query/trace.js";
 import { where } from "./query/where.js";
 import { publishToElemnt, renderElemnt } from "./report/elemnt.js";
@@ -40,10 +42,13 @@ Commands
   impact [base]        What this branch changes: functions, dependents, routes, tests to run (vs. main)
   tour                 A first-day walkthrough: what to run, which files to read, in order
   ask <question>       Claude answers from the code, citing file:line (needs ANTHROPIC_API_KEY)
+  overview             The short version: modules, what depends on what, entry points, commands
+  agents               With Braid: which parts of the code each agent is changing, and where they'll collide
   explain              Ask Claude for module summaries, flows and a debugging guide (shows cost first)
   publish              Publish the map as a page in Elemnt (create or update; for CI too)
   ui                   Open the dashboard in your browser: everything above, no commands needed
   mcp                  Run as an MCP server on stdio, for Claude Code and other agents
+  facts                For other tools: parse files sent as JSON on stdin, print symbols and calls
 
 Options
   -C, --cwd <dir|url>  Repository to read: a folder, or a GitHub/GitLab/Bitbucket link to clone
@@ -55,7 +60,7 @@ Options
   --kind <kind>        risks: only this kind (e.g. swallowed-error, hotspot, orphan)
   --limit <n>          where/risks: how many results
   --depth <n>          trace: how deep to follow calls (default 2)
-  --json               Print JSON instead of text (where, trace, risks)
+  --json               Print JSON instead of text (where, trace, risks, error, impact, tour, ask, overview, agents)
   --yes                explain: go ahead and spend tokens
   --max-modules <n>    explain: explain at most n modules (default 40)
   --max-chars <n>      explain: source characters sent per module (default 120000)
@@ -65,6 +70,9 @@ Options
   --only <dirs>        scan: only these folders, comma-separated (remembered; --only . resets)
   --workers <n>        scan: parser threads (default: one per core, up to 8)
   --working            impact: include uncommitted changes
+  --head <rev>         impact: compare this commit instead of HEAD (the index must be of that commit)
+  --agent <name>       impact: a Braid agent's work so far, uncommitted edits included
+  --braid              risks, error: hand the findings to Braid as a task for an agent (braid start)
   --elemnt-url <url>   publish: your Elemnt server (or ELEMNT_URL); token from ELEMNT_TOKEN
   --space <slug>       publish: the space to publish into (or ELEMNT_SPACE)
   --path <path>        publish: page path in the space (default codebase/<repo name>)
@@ -98,6 +106,9 @@ async function main(argv: string[]): Promise<number> {
       only: { type: "string", multiple: true },
       workers: { type: "string" },
       working: { type: "boolean" },
+      head: { type: "string" },
+      agent: { type: "string" },
+      braid: { type: "boolean" },
       "elemnt-url": { type: "string" },
       space: { type: "string" },
       path: { type: "string" },
@@ -155,7 +166,8 @@ async function main(argv: string[]): Promise<number> {
       const report = buildReport(ws.index, ws.graph, await ws.risks(), await ws.explanations());
       const out = resolve(values.out ?? (format === "md" ? join(root, "SPELUNK.md") : join(root, ".spelunk", "map.html")));
       await mkdir(dirname(out), { recursive: true });
-      await writeFile(out, format === "md" ? renderMarkdown(report) : renderHtml(report, ws.index));
+      const braid = format === "html" ? await braidState(root) : undefined;
+      await writeFile(out, format === "md" ? renderMarkdown(report) : renderHtml(report, ws.index, braid && agentsOnMap(braid, report)));
       return print(`Wrote ${relative(process.cwd(), out) || out}\n${formatSkipped(ws.index.skipped)}${report.overview ? "" : "\nTip: run `spelunk explain` first for module summaries, flows and a debugging guide."}`);
     }
     case "where": {
@@ -194,6 +206,14 @@ async function main(argv: string[]): Promise<number> {
       const ws = await open();
       const risks = await ws.risks();
       const opts = { ...(values.kind ? { kind: values.kind as RiskKind } : {}), ...(values.limit ? { limit: Number(values.limit) } : {}) };
+      if (values.braid) {
+        // One agent per kind of finding, so each task stays focused and small enough to review.
+        const picked = (opts.kind ? risks.filter((r) => r.kind === opts.kind) : risks.filter((r) => r.severity === "high")).slice(0, opts.limit ?? 30);
+        if (!picked.length) return fail(opts.kind ? `No ${opts.kind} risks.` : "No high-severity risks. Pick a kind with --kind.");
+        const kinds = [...new Set(picked.map((r) => r.kind))];
+        const started = await startBraid(root, { tasks: kinds.map((k) => riskTask(picked.filter((r) => r.kind === k))) });
+        return print(`Started ${kinds.length} Braid agent${kinds.length === 1 ? "" : "s"} (${kinds.join(", ")}): ${started.command}\nWatch them with \`braid status --live\` or \`spelunk agents\`. Output: ${relative(process.cwd(), started.log)}`);
+      }
       return print(values.json ? JSON.stringify(opts.kind ? risks.filter((r) => r.kind === opts.kind) : risks, null, 2) : formatRisks(risks, opts));
     }
     case "error": {
@@ -202,14 +222,52 @@ async function main(argv: string[]): Promise<number> {
       if (!input.trim()) return fail('Paste the error: spelunk error "TypeError: x is undefined", or pipe a stack trace in.');
       const ws = await open();
       const result = lookupError(ws.index, ws.graph, input, await ws.risks());
+      if (values.braid) {
+        const started = await startBraid(root, { tasks: [errorTask(input, result)] });
+        return print(`${formatErrorLookup(result)}\n\nStarted a Braid agent to fix it: ${started.command}\nWatch it with \`braid status --live\` or \`spelunk agents\`.`);
+      }
       return print(values.json ? JSON.stringify(result, null, 2) : formatErrorLookup(result));
     }
     case "impact": {
+      if (values.agent) {
+        // A Braid agent's worktree, against where its branch split off its base, edits not yet committed included.
+        const state = await braidState(root);
+        if (!state) return fail("Braid isn't set up in this repository (or the braid command isn't installed).");
+        const a = state.agents.find((x) => x.name === values.agent);
+        if (!a) return fail(`No Braid agent "${values.agent}". Agents: ${state.agents.map((x) => x.name).join(", ") || "none"}.`);
+        if (!existsSync(a.worktree)) return fail(`${a.name}'s worktree is gone (${a.status}).`);
+        root = a.worktree;
+        const ws = await open();
+        const base = (await mergeBase(root, text || a.base)) ?? a.base;
+        const diff = await gitDiff(root, base, { includeWorkingTree: true });
+        const result = impact(ws.index, ws.graph, diff, await ws.risks(), { base: text || a.base, head: `${a.name} (${a.branch}, with uncommitted edits)` });
+        return print(values.json ? JSON.stringify(result, null, 2) : formatImpact(result));
+      }
       const ws = await open();
       const base = text || (await defaultBase(root));
-      const diff = await gitDiff(root, base, { ...(values.working ? { includeWorkingTree: true } : {}) });
-      const result = impact(ws.index, ws.graph, diff, await ws.risks(), { base, head: values.working ? "working tree" : "HEAD" });
+      const diff = await gitDiff(root, base, { ...(values.working ? { includeWorkingTree: true } : {}), ...(values.head ? { head: values.head } : {}) });
+      const result = impact(ws.index, ws.graph, diff, await ws.risks(), { base, head: values.working ? "working tree" : values.head || "HEAD" });
       return print(values.json ? JSON.stringify(result, null, 2) : formatImpact(result));
+    }
+    case "overview": {
+      const ws = await open();
+      const report = buildReport(ws.index, ws.graph, await ws.risks(), await ws.explanations());
+      if (!values.json) return print(formatOverview(report));
+      const { name, commit, stats, languages, entries, commands, overview } = report;
+      return print(JSON.stringify({ name, commit, stats, languages, entries, commands, overview, modules: report.modules.map((m) => ({ path: m.path, lines: m.lines, files: m.files.map((f) => f.path), dependsOn: m.dependsOn, summary: m.explanation?.summary ?? m.files.find((f) => f.doc)?.doc })) }, null, 2));
+    }
+    case "agents": {
+      const state = await braidState(root);
+      if (!state) return fail("Braid isn't set up in this repository, or the braid command isn't installed (https://github.com/ar-0911/braid).");
+      const ws = await open();
+      const map = agentsOnMap(state, buildReport(ws.index, ws.graph, await ws.risks(), await ws.explanations()));
+      return print(values.json ? JSON.stringify(map, null, 2) : formatAgents(map));
+    }
+    case "facts": {
+      // Stateless: no repository, no index. Reads {"files": [{path, text}]} from stdin.
+      const input = process.stdin.isTTY ? "" : await readStdin();
+      if (!input.trim()) return fail('Pipe JSON in: {"files": [{"path": "a.py", "text": "def f(): ..."}]}');
+      return print(JSON.stringify(await parseFiles(JSON.parse(input))));
     }
     case "tour": {
       const ws = await open();

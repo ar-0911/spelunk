@@ -176,6 +176,7 @@ const VIEWS = [
   ["trace", "Trace", "M4 6h6v4H4zM14 14h6v4h-6zM7 10v4a2 2 0 0 0 2 2h5"],
   ["error", "Error lookup", "M12 8v5m0 3v.5M10.3 3.9 2.6 17a2 2 0 0 0 1.7 3h15.4a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"],
   ["changes", "Changes", "M6 3v12m0 0a3 3 0 1 0 0 6 3 3 0 0 0 0-6Zm12-6a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm0 0c0 5-6 4-12 9"],
+  ["agents", "Agents", "M8 11a3 3 0 1 0 0-6 3 3 0 0 0 0 6Zm8 0a3 3 0 1 0 0-6 3 3 0 0 0 0 6ZM2 20c0-3 3-5 6-5s6 2 6 5m0-5c1-.6 2-1 3-1 3 0 5 2 5 5"],
   ["risks", "Risks", "M12 3 2 21h20L12 3Zm0 7v5m0 3v.5"],
   ["routes", "Routes", "M4 7h10M4 12h16M4 17h7"],
   ["debug", "Debugging", "M9 9h6v8a3 3 0 0 1-6 0V9Zm-4 3h4m6 0h4M6 7l3 2m9-2-3 2M6 19l3-2m9 2-3-2"],
@@ -187,7 +188,7 @@ const icon = (d) => '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
 
 function renderNav() {
   const counts = { risks: report ? report.risks.reduce((n, g) => n + g.items.length, 0) : "", routes: report ? report.routes.length : "", config: report ? report.env.length : "" };
-  $("#nav").innerHTML = VIEWS.map(([id, label, d]) => '<button class="navb" data-view="' + id + '"' + (view === id ? ' aria-current="page"' : "") + ">" + icon(d) + esc(label) + (counts[id] !== undefined && counts[id] !== "" ? '<span class="n">' + counts[id] + "</span>" : "") + "</button>").join("") +
+  $("#nav").innerHTML = VIEWS.filter(([id]) => id !== "agents" || (state.braid && state.braid.here)).map(([id, label, d]) => '<button class="navb" data-view="' + id + '"' + (view === id ? ' aria-current="page"' : "") + ">" + icon(d) + esc(label) + (counts[id] !== undefined && counts[id] !== "" ? '<span class="n">' + counts[id] + "</span>" : "") + "</button>").join("") +
     '<p class="navhint">Click any <span class="mono" style="color:var(--accent-ink)">path:line</span> to read the code there.</p>';
 }
 
@@ -199,7 +200,8 @@ function go(v, arg) {
   if (!state.root) return renderWelcome();
   if (!report) { main.innerHTML = '<div class="view empty"><span class="spinner"></span> Reading the repository…</div>'; return; }
   pathSet = null;
-  Promise.resolve(({ overview: vOverview, tour: vTour, find: vFind, ask: vAsk, trace: vTrace, error: vError, changes: vChanges, risks: vRisks, routes: vRoutes, debug: vDebug, config: vConfig, explain: vExplain, share: vShare })[v](arg)).catch((e) => { $("#main").innerHTML = '<div class="view"><div class="note err">' + esc(e.message) + "</div></div>"; });
+  clearTimeout(agentsTimer);
+  Promise.resolve(({ agents: vAgents, overview: vOverview, tour: vTour, find: vFind, ask: vAsk, trace: vTrace, error: vError, changes: vChanges, risks: vRisks, routes: vRoutes, debug: vDebug, config: vConfig, explain: vExplain, share: vShare })[v](arg)).catch((e) => { $("#main").innerHTML = '<div class="view"><div class="note err">' + esc(e.message) + "</div></div>"; });
 }
 
 // ---------- Welcome & folder picker
@@ -347,7 +349,7 @@ function vRisks() {
     groups.map((g) => '<button class="chip" data-kind="' + g.kind + '" aria-pressed="' + (riskKind === g.kind) + '">' + esc(g.kind.replace(/-/g, " ")) + " " + g.items.length + "</button>").join("") + "</div>";
   if (!groups.length) h += '<p class="empty">Nothing flagged.</p>';
   for (const g of list) {
-    h += "<h2>" + esc(g.kind.replace(/-/g, " ")) + ' <span class="muted" style="font-size:15px">' + g.items.length + '</span></h2><p class="muted">' + prose(g.info) + "</p>";
+    h += "<h2>" + esc(g.kind.replace(/-/g, " ")) + ' <span class="muted" style="font-size:15px">' + g.items.length + "</span>" + (canBraid() ? ' <button class="btn" style="font-size:12.5px;vertical-align:3px" data-braidkind="' + g.kind + '" title="Start a Braid agent that fixes these">Fix with Braid</button>' : "") + '</h2><p class="muted">' + prose(g.info) + "</p>";
     h += g.items.slice(0, riskKind ? 300 : 12).map((x) => '<div class="risk sev-' + x.severity + '"><span class="pill ' + x.severity + '">' + x.severity + "</span> " + esc(x.title) + (x.detail !== g.info ? '<div class="muted" style="font-size:13px">' + prose(x.detail) + "</div>" : "") + "<div>" + x.locations.slice(0, 6).map((l) => loc(l.path, l.line)).join(" · ") + "</div></div>").join("");
     if (!riskKind && g.items.length > 12) h += '<button class="lnk" data-kind="' + g.kind + '">Show all ' + g.items.length + "</button>";
   }
@@ -540,25 +542,79 @@ async function runError(text) {
     const ours = r.frames.filter((f) => f.file);
     if (ours.length) h += "<h3>Stack frames in this project</h3><p class=\"muted\" style=\"font-size:13px\">Innermost first. " + (r.frames.length - ours.length) + " frames in libraries or the runtime are hidden.</p>" + ours.map((f) => "<div>" + loc(f.file, f.line || 0) + " " + (f.symbol ? "<b>" + esc(f.symbol.name) + "</b>" : f.fn ? '<span class="muted">' + esc(f.fn) + "</span>" : "") + "</div>").join("");
     if (r.callers.length) h += "<h3>Files that call into it</h3>" + r.callers.map((c) => "<div>" + loc(c) + "</div>").join("");
+    if (canBraid() && (r.start || r.origins.length)) h += '<p style="margin-top:14px"><button class="btn" id="braiderr">Fix with Braid</button> <span class="muted" style="font-size:13px">Starts an agent with this error and where Spelunk traced it.</span></p>';
     if (r.risks.length) h += "<h3>Risks in these files</h3>" + r.risks.map((x) => '<div class="risk sev-' + x.severity + '"><span class="pill ' + x.severity + '">' + x.severity + "</span> " + esc(x.title) + "<div>" + x.locations.slice(0, 3).map((l) => loc(l.path, l.line)).join(" · ") + "</div></div>").join("");
     $("#er").innerHTML = h;
   } catch (e) { $("#er").innerHTML = '<div class="note err">' + esc(e.message) + "</div>"; }
 }
 
+// ---------- Agents (Braid)
+let agentsTimer = 0, agentPick = "", agentShown = "";
+const canBraid = () => Boolean(state.braid && state.braid.canStart);
+const SEV_PILL = { conflict: "high", semantic: "medium", overlap: "low" };
+async function vAgents() {
+  const m = await api("/api/agents");
+  if (view !== "agents") return;
+  let h = '<div class="view"><h1>Agents</h1>';
+  if (!m.here) { $("#main").innerHTML = h + '<p class="empty">Braid isn\'t running agents here.</p></div>'; return; }
+  const live = m.agents.filter((a) => a.live);
+  h += '<p class="lede">What each <a href="https://github.com/ar-0911/braid" target="_blank" rel="noopener">Braid</a> agent is changing, on the map of the code, and where they are about to collide. Updates every few seconds.</p>';
+  h += '<div class="stats"><span><b>' + live.length + "</b> working</span><span>landing on <b>" + esc(m.base) + "</b></span>" + (m.waiting ? "<span><b>" + m.waiting + "</b> waiting for your OK (braid approvals)</span>" : "") + "<span>watcher <b>" + (m.watcher ? "running" : "stopped") + "</b></span></div>";
+  if (m.risks.length) h += "<h2>Predicted collisions</h2>" + m.risks.map((r) => '<div class="risk sev-' + SEV_PILL[r.severity] + '"><span class="pill ' + SEV_PILL[r.severity] + '">' + esc(r.severity) + "</span> <b>" + esc(r.a) + "</b> and <b>" + esc(r.b) + "</b>" + (r.modules.length ? ' <span class="muted">in ' + r.modules.map((p) => '<button class="lnk" data-module="' + esc(p) + '">' + esc(p || "(root)") + "</button>").join(", ") + "</span>" : "") + '<div class="muted mono" style="font-size:12px">' + r.files.slice(0, 8).map(esc).join(" · ") + "</div></div>").join("");
+  const shared = m.modules.filter((x) => x.agents.length > 1);
+  if (shared.length) h += '<div class="note">More than one agent is changing ' + shared.map((x) => '<button class="lnk" data-module="' + esc(x.path) + '">' + esc(x.path || "(root)") + "</button> (" + x.agents.map((a) => esc(a.name)).join(", ") + ")").join(", ") + ".</div>";
+  h += '<div class="figure">' + report.diagram + "</div>";
+  h += '<h2>Agents</h2><div class="cards">' + (m.agents.length ? m.agents.map((a) => '<div class="card"' + (a.live ? "" : ' style="opacity:.6"') + '><h4>' + esc(a.name) + ' <span class="tag">' + esc(a.status) + "</span></h4><p style=\"font-size:13px;margin:0 0 8px\">" + esc(a.task.slice(0, 220)) + "</p>" +
+    (a.modules.length ? '<div class="muted" style="font-size:12.5px">Parts: ' + a.modules.map((p) => '<button class="lnk" data-module="' + esc(p) + '">' + esc(p || "(root)") + "</button>").join(", ") + "</div>" : "") +
+    (a.files.length ? '<div style="font-size:12.5px;margin-top:4px">' + a.files.slice(0, 8).map((f) => loc(f)).join(" · ") + (a.files.length > 8 ? " +" + (a.files.length - 8) : "") + "</div>" : '<div class="muted" style="font-size:12.5px">No changes yet.</div>') +
+    (a.needs ? '<div class="note err" style="margin:8px 0 0;font-size:12.5px">Needs you: ' + esc(a.needs.slice(0, 200)) + "</div>" : "") +
+    (a.live && a.files.length ? '<p style="margin:8px 0 0"><button class="btn" data-agentimpact="' + esc(a.name) + '">What it touches</button></p>' : "") + "</div>").join("") : '<p class="empty">No agents yet.</p>') + "</div>";
+  if (canBraid()) h += '<h2>Start more</h2><form id="bf" class="askbox"><textarea class="field" id="bg" rows="3" placeholder="Describe the work. Braid plans it into parallel tasks and starts an agent for each." aria-label="Goal for Braid"></textarea><div><button class="btn primary">Plan and start</button></div></form>';
+  $("#main").innerHTML = h + "</div>";
+  if ($("#bf")) $("#bf").addEventListener("submit", (e) => { e.preventDefault(); startBraid({ goal: $("#bg").value }); });
+  clearTimeout(agentsTimer);
+  const tick = () => {
+    if (view !== "agents") return;
+    // Don't redraw under someone typing a goal.
+    if ($("#bg") && (document.activeElement === $("#bg") || $("#bg").value)) { agentsTimer = setTimeout(tick, 5000); return; }
+    vAgents().catch(() => {});
+  };
+  agentsTimer = setTimeout(tick, 5000);
+}
+async function startBraid(body) {
+  const what = body.goal ? "plan this and start agents for it" : "start a Braid agent for this";
+  if (!confirm("Braid will " + what + ". The agents edit code on their own branches and use your Claude account. Go ahead?")) return;
+  try {
+    const r = await api("/api/braid/start", body);
+    state = await api("/api/state");
+    alert("Started: " + r.command + "\n\nWatch them on the Agents page, or with braid status --live.");
+    report = await api("/api/report");
+    go("agents");
+  } catch (e) { alert(e.message); }
+}
+
 // ---------- Changes (impact)
 function vChanges() {
   $("#main").innerHTML = '<div class="view"><h1>Changes</h1><p class="lede">What the current branch touches compared with the main branch: the functions it edits, what depends on them, the pages and API calls to re-check, and the tests to run.</p>' +
-    '<form id="cf" class="searchrow"><input class="field" id="cb" placeholder="Compare with (default: the main branch)" aria-label="Branch or commit to compare with" style="max-width:360px"><label class="tick" style="margin:0"><input type="checkbox" id="cw"> Include uncommitted edits</label><button class="btn primary">Show changes</button></form><div id="cr"></div></div>';
+    '<form id="cf" class="searchrow"><input class="field" id="cb" placeholder="Compare with (default: the main branch)" aria-label="Branch or commit to compare with" style="max-width:360px"><label class="tick" style="margin:0"><input type="checkbox" id="cw"> Include uncommitted edits</label><select class="field" id="ca" aria-label="Whose changes" style="max-width:220px;display:none"><option value="">This branch</option></select><button class="btn primary">Show changes</button></form><div id="cr"></div></div>';
   $("#cf").addEventListener("submit", (e) => { e.preventDefault(); runChanges(); });
+  if (state.braid && state.braid.here) api("/api/agents").then((m) => {
+    if (!m.here || !m.agents.some((a) => a.live)) return;
+    $("#ca").innerHTML = '<option value="">This branch</option>' + m.agents.filter((a) => a.live).map((a) => '<option value="' + esc(a.name) + '"' + (a.name === (agentPick || agentShown) ? " selected" : "") + ">Agent " + esc(a.name) + "</option>").join("");
+    $("#ca").style.display = "";
+  }).catch(() => {});
   runChanges();
 }
 async function runChanges() {
   $("#cr").innerHTML = '<p class="muted"><span class="spinner"></span> Comparing…</p>';
   try {
-    const i = await api("/api/impact?base=" + encodeURIComponent($("#cb").value) + ($("#cw").checked ? "&working=1" : ""));
+    const who = agentPick || ($("#ca") && $("#ca").value) || "";
+    agentPick = "";
+    agentShown = who;
+    const i = await api(who ? "/api/impact?agent=" + encodeURIComponent(who) : "/api/impact?base=" + encodeURIComponent($("#cb").value) + ($("#cw").checked ? "&working=1" : ""));
     if (!$("#cb").value) $("#cb").placeholder = "Compare with: " + i.base;
     if (!i.files.length) { $("#cr").innerHTML = '<p class="empty">No changes between ' + esc(i.head) + " and " + esc(i.base) + ".</p>"; return; }
-    let h = '<div class="stats"><span><b>' + i.files.length + "</b> files changed</span><span><b>" + i.dependents.length + "</b> depend on them</span><span><b>" + i.routes.length + "</b> routes to re-check</span><span><b>" + i.tests.length + "</b> tests to run</span></div>";
+    let h = (i.agent ? '<p class="muted" style="margin:0 0 10px">Agent <b>' + esc(i.agent) + "</b>'s work against " + esc(i.base) + ", uncommitted edits included.</p>" : "") + '<div class="stats"><span><b>' + i.files.length + "</b> files changed</span><span><b>" + i.dependents.length + "</b> depend on them</span><span><b>" + i.routes.length + "</b> routes to re-check</span><span><b>" + i.tests.length + "</b> tests to run</span></div>";
     if (i.untested.length) h += '<div class="note err">No test reaches ' + i.untested.slice(0, 8).map((p) => loc(p)).join(", ") + (i.untested.length > 8 ? " and " + (i.untested.length - 8) + " more" : "") + ". Check these by hand.</div>";
     h += '<h2>Changed</h2><div class="tw"><table><tr><th>File</th><th>Change</th><th>Functions touched</th></tr>' + i.files.slice(0, 200).map((f) => "<tr><td>" + (f.inIndex ? loc(f.path) : '<span class="mono" style="font-size:12.5px">' + esc(f.path) + "</span>") + '</td><td><span class="tag">' + f.status + "</span></td><td>" + f.symbols.slice(0, 10).map((s) => loc(f.path, s.line, (s.parent ? s.parent + "." : "") + s.name)).join(", ") + (f.symbols.length > 10 ? " …" : "") + "</td></tr>").join("") + "</table></div>";
     if (i.routes.length) h += '<h2>Routes to re-check</h2><div class="tw"><table>' + i.routes.map((r) => '<tr><td><span class="tag">' + esc(r.method) + '</span></td><td class="mono" style="font-size:12.5px">' + esc(r.path) + "</td><td>" + loc(r.file, r.line) + '</td><td class="muted">' + esc(r.reason) + "</td></tr>").join("") + "</table></div>";
@@ -674,6 +730,9 @@ document.addEventListener("click", async (e) => {
     if (d.view) return go(d.view);
     if (d.module !== undefined) return vModule(d.module);
     if (d.kind !== undefined) { riskKind = d.kind; return vRisks(); }
+    if (d.braidkind) return startBraid({ kind: d.braidkind });
+    if (t.id === "braiderr") return startBraid({ error: $("#et").value });
+    if (d.agentimpact) { agentPick = d.agentimpact; return go("changes"); }
     if (d.pick !== undefined) return openPicker();
     if (d.dir) return openPicker(d.dir);
     if (d.tab) return showTab(d.tab);
