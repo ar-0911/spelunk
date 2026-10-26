@@ -113,58 +113,103 @@ export interface WhereOptions {
   kinds?: Hit["kind"][];
 }
 
+interface Posting {
+  doc: number;
+  /** Field-weighted count of the term in the document. */
+  tf: number;
+  /** The heaviest field it appears in, for "why this matched". */
+  label: string;
+}
+
+interface Corpus {
+  docs: Doc[];
+  avg: number;
+  /** term → the documents containing it. Queries walk only these lists, never the whole corpus. */
+  postings: Map<string, Posting[]>;
+  vocab: string[];
+}
+
+// Built once per loaded index: on a 20k-file repo this is most of a query's cost.
+const corpora = new WeakMap<Index, Corpus>();
+
+function corpus(index: Index): Corpus {
+  let c = corpora.get(index);
+  if (c) return c;
+  const docs = index.files.flatMap(docsFor);
+  const postings = new Map<string, Posting[]>();
+  docs.forEach((d, i) => {
+    const tf = new Map<string, Posting>();
+    for (const f of d.fields) {
+      for (const t of f.terms) {
+        const p = tf.get(t);
+        if (p) p.tf += f.weight;
+        else tf.set(t, { doc: i, tf: f.weight, label: f.label });
+      }
+    }
+    for (const [t, p] of tf) {
+      let list = postings.get(t);
+      if (!list) postings.set(t, (list = []));
+      list.push(p);
+    }
+  });
+  c = { docs, avg: docs.reduce((n, d) => n + d.length, 0) / (docs.length || 1) || 1, postings, vocab: [...postings.keys()] };
+  corpora.set(index, c);
+  return c;
+}
+
 export function where(index: Index, query: string, options: WhereOptions = {}): Hit[] {
   const limit = options.limit ?? 15;
-  const docs = index.files.flatMap(docsFor).filter((d) => !options.kinds || options.kinds.includes(d.hit.kind));
+  const { docs, avg, postings, vocab } = corpus(index);
   const q = tokens(query);
   if (!q.length || !docs.length) return [];
   // Each query term expands to its synonyms; a synonym counts a bit less than the word itself.
   const expanded = q.map((t) => ({ term: t, alts: [...new Set([t, ...(SYNONYMS[t] ?? []).map(stem)])] }));
 
   const N = docs.length;
-  const avg = docs.reduce((n, d) => n + d.length, 0) / N || 1;
-  const df = new Map<string, number>();
-  for (const d of docs) {
-    const seen = new Set(d.fields.flatMap((f) => f.terms));
-    for (const t of seen) df.set(t, (df.get(t) ?? 0) + 1);
-  }
-  const idf = (t: string) => Math.log(1 + (N - (df.get(t) ?? 0) + 0.5) / ((df.get(t) ?? 0) + 0.5));
+  const df = (t: string) => postings.get(t)?.length ?? 0;
+  const idf = (t: string) => Math.log(1 + (N - df(t) + 0.5) / (df(t) + 0.5));
   const k1 = 1.2;
   const b = 0.75;
-  const exact = query.trim();
+  const exact = query.trim().toLowerCase();
 
-  const scored: Hit[] = [];
-  for (const d of docs) {
-    let score = 0;
-    let matchedTerms = 0;
-    const why = new Set<string>();
-    for (const { term, alts } of expanded) {
-      let best = 0;
-      for (const alt of alts) {
-        let tf = 0;
-        let label = "";
-        for (const f of d.fields) {
-          const c = f.terms.filter((x) => x === alt || (alt.length > 3 && x.startsWith(alt))).length;
-          if (c) {
-            tf += c * f.weight;
-            label ||= f.label;
-          }
-        }
-        if (!tf) continue;
-        const s = (idf(alt) * tf * (k1 + 1)) / (tf + k1 * (1 - b + (b * d.length) / avg)) * (alt === term ? 1 : 0.6);
-        if (s > best) {
-          best = s;
-          why.add(`${label}: ${alt}`);
+  const total = new Map<number, { score: number; matched: number; why: Set<string> }>();
+  for (const { term, alts } of expanded) {
+    const best = new Map<number, { s: number; why: string }>();
+    for (const alt of alts) {
+      // Words of four letters or more also match longer words they start: "auth" finds "authenticate".
+      const terms = alt.length > 3 ? vocab.filter((v) => v.startsWith(alt)) : postings.has(alt) ? [alt] : [];
+      const tfs = new Map<number, { tf: number; label: string }>();
+      for (const t of terms) {
+        for (const p of postings.get(t)!) {
+          const cur = tfs.get(p.doc);
+          if (cur) cur.tf += p.tf;
+          else tfs.set(p.doc, { tf: p.tf, label: p.label });
         }
       }
-      if (best) matchedTerms++;
-      score += best;
+      const w = idf(alt) * (alt === term ? 1 : 0.6);
+      for (const [doc, { tf, label }] of tfs) {
+        const s = (w * tf * (k1 + 1)) / (tf + k1 * (1 - b + (b * docs[doc]!.length) / avg));
+        const cur = best.get(doc);
+        if (!cur || s > cur.s) best.set(doc, { s, why: `${label}: ${alt}` });
+      }
     }
-    if (!score) continue;
+    for (const [doc, { s, why }] of best) {
+      const t = total.get(doc) ?? { score: 0, matched: 0, why: new Set<string>() };
+      t.score += s;
+      t.matched++;
+      t.why.add(why);
+      total.set(doc, t);
+    }
+  }
+
+  const scored: Hit[] = [];
+  for (const [doc, t] of total) {
+    const d = docs[doc]!;
+    if (options.kinds && !options.kinds.includes(d.hit.kind)) continue;
     // Prefer documents that match every part of the question.
-    score *= d.prior * (0.5 + (0.5 * matchedTerms) / expanded.length);
-    if (d.hit.name && d.hit.name.toLowerCase() === exact.toLowerCase()) score *= 3;
-    scored.push({ ...d.hit, score: Math.round(score * 100) / 100, why: [...why].slice(0, 3).join(", ") });
+    let score = t.score * d.prior * (0.5 + (0.5 * t.matched) / expanded.length);
+    if (d.hit.name && d.hit.name.toLowerCase() === exact) score *= 3;
+    scored.push({ ...d.hit, score: Math.round(score * 100) / 100, why: [...t.why].slice(0, 3).join(", ") });
   }
   return scored.sort((a, b) => b.score - a.score).slice(0, limit);
 }

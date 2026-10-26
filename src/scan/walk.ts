@@ -20,8 +20,14 @@ export interface Git {
   remote?: string;
 }
 
-/** git@github.com:o/r.git or https://github.com/o/r.git → https://github.com/o/r */
+/**
+ * git@github.com:o/r.git or https://github.com/o/r.git → https://github.com/o/r.
+ * Self-hosted Bitbucket (Data Center) clones from /scm/PROJ/repo or ssh port 7999
+ * and browses at /projects/PROJ/repos/repo.
+ */
 export function webUrl(remote: string): string | undefined {
+  const server = remote.trim().match(/^(?:ssh:\/\/git@([^/:]+):\d+\/|https?:\/\/(?:[^@/]+@)?([^/:]+)(?::\d+)?\/scm\/)([^/]+)\/([^/]+?)(?:\.git)?\/?$/);
+  if (server && /bitbucket/.test(server[1] ?? server[2]!)) return `https://${server[1] ?? server[2]}/projects/${server[3]!.toUpperCase()}/repos/${server[4]}`;
   const m = remote.trim().match(/^(?:git@|ssh:\/\/git@|https?:\/\/(?:[^@/]+@)?)([^:/]+)[:/](.+?)(?:\.git)?\/?$/);
   if (!m || !/(github|gitlab|bitbucket|codeberg)\./.test(m[1]!)) return undefined;
   return `https://${m[1]}/${m[2]!.replace(/^git\//, "")}`;

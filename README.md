@@ -109,7 +109,7 @@ Project files: package.json, pyproject.toml, requirements.txt, setup.py, go.mod,
 scan     walk files (git ls-files when it's a repo) → tree-sitter → symbols, imports, calls
          + line patterns → routes, env vars, errors, logs, TODOs, entry points
          + manifests → commands, dependencies, documented env vars
-         → resolve imports to files → .spelunk/index.json
+         → resolve imports to files → .spelunk/index.jsonl
 analyse  file graph → modules (directories, folded to ≤ 40) → risks, route matching
 query    where (BM25 with synonyms) · trace (call trees from call sites + definitions)
 explain  per-module prompts → Claude → overview prompt → .spelunk/explain.json

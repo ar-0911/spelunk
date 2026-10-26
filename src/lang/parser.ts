@@ -22,7 +22,11 @@ function load(grammar: string): Promise<Language | undefined> {
 
 const parsers = new Map<string, Parser>();
 
+/** Grammars that threw while parsing (some prebuilt scanners call missing functions); their files get line-based facts only. */
+const broken = new Set<string>();
+
 export async function parse(grammar: string, source: string): Promise<Tree | undefined> {
+  if (broken.has(grammar)) return undefined;
   const lang = await load(grammar);
   if (!lang) return undefined;
   let parser = parsers.get(grammar);
@@ -31,5 +35,11 @@ export async function parse(grammar: string, source: string): Promise<Tree | und
     parser.setLanguage(lang);
     parsers.set(grammar, parser);
   }
-  return parser.parse(source) ?? undefined;
+  try {
+    return parser.parse(source) ?? undefined;
+  } catch {
+    broken.add(grammar);
+    parsers.delete(grammar);
+    return undefined;
+  }
 }

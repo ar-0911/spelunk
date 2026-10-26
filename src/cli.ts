@@ -4,14 +4,20 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import type { RiskKind } from "./analysis/risks.js";
+import { ask, ClaudeAsk } from "./explain/ask.js";
 import { Claude, ClaudeError, estimateCost, MODEL } from "./explain/claude.js";
 import { explain, explanationsPath, plan } from "./explain/explain.js";
-import { formatFile, formatHits, formatModule, formatRisks, formatRoutes, formatTrace } from "./format.js";
+import { formatFile, formatHits, formatModule, formatOverview, formatRisks, formatRoutes, formatTrace } from "./format.js";
+import { formatErrorLookup, lookupError } from "./query/errors.js";
+import { defaultBase, formatImpact, gitDiff, impact } from "./query/impact.js";
 import { resolveTarget, trace } from "./query/trace.js";
 import { where } from "./query/where.js";
+import { publishToElemnt, renderElemnt } from "./report/elemnt.js";
 import { renderHtml } from "./report/html.js";
 import { renderMarkdown } from "./report/markdown.js";
 import { buildReport } from "./report/model.js";
+import { buildTour, formatTour } from "./report/tour.js";
+import { cloneRepo, isRepoUrl } from "./scan/clone.js";
 import { indexPath } from "./scan/scan.js";
 import { openWorkspace } from "./workspace.js";
 
@@ -30,14 +36,22 @@ Commands
   module <dir>         One module: files, dependencies, and Claude's summary if explained
   routes [filter]      HTTP routes and the client calls that hit them
   risks                Smells and risks: swallowed errors, cycles, hotspots, dead code, …
+  error [text]         Paste a stack trace or log line (or pipe it in): find the code that raised it
+  impact [base]        What this branch changes: functions, dependents, routes, tests to run (vs. main)
+  tour                 A first-day walkthrough: what to run, which files to read, in order
+  ask <question>       Claude answers from the code, citing file:line (needs ANTHROPIC_API_KEY)
   explain              Ask Claude for module summaries, flows and a debugging guide (shows cost first)
+  publish              Publish the map as a page in Elemnt (create or update; for CI too)
   ui                   Open the dashboard in your browser: everything above, no commands needed
   mcp                  Run as an MCP server on stdio, for Claude Code and other agents
 
 Options
-  -C, --cwd <dir>      Repository to read (default: current directory)
+  -C, --cwd <dir|url>  Repository to read: a folder, or a GitHub/GitLab/Bitbucket link to clone
+                       (default: current directory)
+  --git-token <token>  Token for cloning a private repository (or GITHUB_TOKEN, GITLAB_TOKEN,
+                       BITBUCKET_TOKEN, SPELUNK_GIT_TOKEN)
   -o, --out <file>     map: where to write
-  --format html|md     map: output format (default html)
+  --format html|md     map: output format (default html). impact: md for a PR comment
   --kind <kind>        risks: only this kind (e.g. swallowed-error, hotspot, orphan)
   --limit <n>          where/risks: how many results
   --depth <n>          trace: how deep to follow calls (default 2)
@@ -46,6 +60,14 @@ Options
   --max-modules <n>    explain: explain at most n modules (default 40)
   --max-chars <n>      explain: source characters sent per module (default 120000)
   --full               scan: reparse every file
+  --only <dirs>        scan: only these folders, comma-separated (remembered; --only . resets)
+  --workers <n>        scan: parser threads (default: one per core, up to 8)
+  --working            impact: include uncommitted changes
+  --elemnt-url <url>   publish: your Elemnt server (or ELEMNT_URL); token from ELEMNT_TOKEN
+  --space <slug>       publish: the space to publish into (or ELEMNT_SPACE)
+  --path <path>        publish: page path in the space (default codebase/<repo name>)
+  --draft              publish: save as a draft instead of publishing
+  --dry-run            publish: print the page source instead of sending it
   --port <n>           ui: port to listen on (default: any free port)
   --no-open            ui: don't open a browser, just print the link
   -h, --help, -v, --version
@@ -69,6 +91,15 @@ async function main(argv: string[]): Promise<number> {
       full: { type: "boolean" },
       port: { type: "string" },
       "no-open": { type: "boolean" },
+      "git-token": { type: "string" },
+      only: { type: "string", multiple: true },
+      workers: { type: "string" },
+      working: { type: "boolean" },
+      "elemnt-url": { type: "string" },
+      space: { type: "string" },
+      path: { type: "string" },
+      draft: { type: "boolean" },
+      "dry-run": { type: "boolean" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },
@@ -80,12 +111,16 @@ async function main(argv: string[]): Promise<number> {
     return values.help ? 0 : 1;
   }
 
-  const root = resolve(values.cwd ?? ".");
+  let root = resolve(values.cwd ?? ".");
+  if (values.cwd && isRepoUrl(values.cwd)) {
+    root = await cloneRepo(values.cwd, { ...(values["git-token"] ? { token: values["git-token"] } : {}), onProgress: (m) => process.stderr.write(`${m}\n`) });
+  }
   const num = (v: string | undefined) => (v === undefined ? undefined : Number(v));
   const progress = process.stderr.isTTY ? (done: number, total: number) => done % 50 === 0 && process.stderr.write(`\rReading files… ${done}/${total}`) : undefined;
   const open = async (refresh = true) => {
     // Every command rescans: unchanged files are reused by hash, so this is cheap and answers never go stale.
-    const ws = await openWorkspace(root, { refresh, ...(values.full ? { full: true } : {}), ...(progress ? { onProgress: progress } : {}) });
+    const only = values.only?.flatMap((o) => o.split(",")).map((o) => o.trim());
+    const ws = await openWorkspace(root, { refresh, ...(values.full ? { full: true } : {}), ...(only ? { only } : {}), ...(values.workers ? { workers: Number(values.workers) } : {}), ...(progress ? { onProgress: progress } : {}) });
     if (progress) process.stderr.write("\r\x1b[K");
     return ws;
   };
@@ -152,6 +187,54 @@ async function main(argv: string[]): Promise<number> {
       const opts = { ...(values.kind ? { kind: values.kind as RiskKind } : {}), ...(values.limit ? { limit: Number(values.limit) } : {}) };
       return print(values.json ? JSON.stringify(opts.kind ? risks.filter((r) => r.kind === opts.kind) : risks, null, 2) : formatRisks(risks, opts));
     }
+    case "error": {
+      // Piped in (`pbpaste | spelunk error`) or given as arguments.
+      const input = text || (process.stdin.isTTY ? "" : await readStdin());
+      if (!input.trim()) return fail('Paste the error: spelunk error "TypeError: x is undefined", or pipe a stack trace in.');
+      const ws = await open();
+      const result = lookupError(ws.index, ws.graph, input, await ws.risks());
+      return print(values.json ? JSON.stringify(result, null, 2) : formatErrorLookup(result));
+    }
+    case "impact": {
+      const ws = await open();
+      const base = text || (await defaultBase(root));
+      const diff = await gitDiff(root, base, { ...(values.working ? { includeWorkingTree: true } : {}) });
+      const result = impact(ws.index, ws.graph, diff, await ws.risks(), { base, head: values.working ? "working tree" : "HEAD" });
+      return print(values.json ? JSON.stringify(result, null, 2) : formatImpact(result));
+    }
+    case "tour": {
+      const ws = await open();
+      const report = buildReport(ws.index, ws.graph, await ws.risks(), await ws.explanations());
+      const steps = buildTour(report);
+      return print(values.json ? JSON.stringify(steps, null, 2) : formatTour(report, steps));
+    }
+    case "ask": {
+      if (!text) return fail('Ask a question: spelunk ask "how does saving a page work?"');
+      if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) return fail("Set ANTHROPIC_API_KEY to use ask.");
+      const ws = await open();
+      const report = buildReport(ws.index, ws.graph, await ws.risks(), await ws.explanations());
+      try {
+        const result = await ask(ws, new ClaudeAsk(), text, { overview: formatOverview(report), onStep: (s) => process.stderr.write(`  ${s.label}\n`) });
+        if (values.json) return print(JSON.stringify(result, null, 2));
+        return print(`\n${result.answer}\n\n(${result.steps.length} lookups, ${result.usage.calls} calls, about $${estimateCost(result.usage.inputTokens, result.usage.outputTokens).toFixed(2)})`);
+      } catch (err) {
+        if (err instanceof ClaudeError) return fail(err.message);
+        throw err;
+      }
+    }
+    case "publish": {
+      const ws = await open();
+      const report = buildReport(ws.index, ws.graph, await ws.risks(), await ws.explanations());
+      const source = renderElemnt(report);
+      if (values["dry-run"]) return print(source);
+      const url = values["elemnt-url"] ?? process.env.ELEMNT_URL;
+      const token = process.env.ELEMNT_TOKEN;
+      const space = values.space ?? process.env.ELEMNT_SPACE;
+      if (!url || !token || !space) return fail("publish needs your Elemnt server (--elemnt-url or ELEMNT_URL), an API token (ELEMNT_TOKEN) and a space (--space or ELEMNT_SPACE).");
+      const slug = report.name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "repo";
+      const result = await publishToElemnt(source, { url, token, space, path: values.path ?? `codebase/${slug}`, ...(values.draft ? { draft: true } : {}), message: `Spelunk map${report.commit ? ` at ${report.commit.slice(0, 10)}` : ""}` });
+      return print(`${result.action === "unchanged" ? "Already up to date" : result.action === "created" ? "Created" : "Updated"}: ${result.url}`);
+    }
     case "explain": {
       const ws = await open();
       const options = { ...(values["max-chars"] ? { maxChars: Number(values["max-chars"]) } : {}), ...(values["max-modules"] ? { maxModules: Number(values["max-modules"]) } : {}) };
@@ -188,6 +271,12 @@ async function main(argv: string[]): Promise<number> {
   }
 }
 
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const c of process.stdin) chunks.push(c as Buffer);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
 function print(s: string): number {
   process.stdout.write(`${s}\n`);
   return 0;
@@ -198,12 +287,19 @@ function fail(s: string): number {
   return 1;
 }
 
+// `spelunk map | head` closes stdout early; that's not an error.
+process.stdout.on("error", (err: NodeJS.ErrnoException) => {
+  if (err.code === "EPIPE") process.exit(0);
+  throw err;
+});
+
 main(process.argv.slice(2)).then(
   (code) => {
     if (code >= 0) process.exitCode = code;
   },
   (err: unknown) => {
-    process.stderr.write(`${err instanceof Error ? (err.stack ?? err.message) : String(err)}\n`);
+    // Messages are written for people; the stack only helps when debugging Spelunk itself.
+    process.stderr.write(`${err instanceof Error ? (process.env.SPELUNK_DEBUG ? (err.stack ?? err.message) : err.message) : String(err)}\n`);
     process.exitCode = 1;
   },
 );

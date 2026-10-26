@@ -398,7 +398,7 @@ async function openFile(path, line) {
     const f = await api("/api/file?path=" + encodeURIComponent(path));
     const x = f.facts;
     $("#dtitle").innerHTML = "<b>" + esc(x.path) + '</b><div class="muted" style="font-size:12.5px">' + esc(x.language) + " · " + esc(x.role) + " · " + fmt(x.lines) + " lines" + (x.entry ? " · starts the program (" + esc(x.entry) + ")" : "") + "</div>" + (x.doc ? '<div style="font-size:13px;margin-top:4px">' + prose(x.doc) + "</div>" : "") +
-      (report && report.remote ? '<a style="font-size:12.5px" target="_blank" rel="noopener noreferrer" href="' + esc(report.remote + "/blob/" + (report.commit || "HEAD") + "/" + x.path + (line ? "#L" + line : "")) + '">Open on the code host ↗</a>' : "");
+      (report && report.links ? '<a style="font-size:12.5px" target="_blank" rel="noopener noreferrer" href="' + esc(report.links.template.replace("{path}", x.path).replace("{line}", line ? report.links.anchor + line : "")) + '">Open on the code host ↗</a>' : "");
     drawerData = { f, line };
     showTab(drawerTab);
   } catch (e) { $("#dpane").innerHTML = '<div class="note err" style="margin:16px">' + esc(e.message) + "</div>"; }

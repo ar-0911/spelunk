@@ -1,4 +1,4 @@
-/** What Spelunk knows about one repository. Plain JSON, stored at .spelunk/index.json. */
+/** What Spelunk knows about one repository. Stored as JSON Lines at .spelunk/index.jsonl. */
 
 export type SymbolKind = "function" | "method" | "class" | "interface" | "type" | "enum" | "struct" | "trait" | "module" | "constant";
 
@@ -108,6 +108,8 @@ export interface Index {
   churn: Record<string, number>;
   /** Files Spelunk saw but didn't parse (binary, too large, unknown language). */
   skipped: { path: string; reason: string }[];
+  /** Directories the scan was limited to (`--only`); absent means the whole repo. */
+  only?: string[];
 }
 
-export const INDEX_VERSION = 1;
+export const INDEX_VERSION = 2;
