@@ -35,6 +35,24 @@ pnpm install        # also builds dist/
 npm link            # puts `spelunk` on your PATH
 ```
 
+## The dashboard (no command line needed)
+
+```sh
+spelunk ui
+```
+
+This opens Spelunk in your browser. Choose a project folder and click around:
+
+- **Overview**: what the project is, where the program starts, which files to read first, how to run it, a diagram of how the parts connect, and every part with its summary.
+- **Find**: type plain words ("send email", "payment failed") and jump to the code.
+- **Trace**: pick a web address or function and see who calls it and what it calls.
+- **Risks**, **Routes**, **Config** and **Debugging**: the same findings as the CLI, as pages.
+- **Explain with Claude**: shows the cost, takes an API key for that run only, and adds Claude's explanations to every page.
+
+Click any `path:line` to read the code there, with a "What's in it" tab listing the file's functions, imports, settings and errors.
+
+The dashboard runs on your machine at `127.0.0.1` only. It prints a link with a one-time token, and requests without that token are refused, so other websites open in your browser can't read your code through it.
+
 ## Commands
 
 Run these inside the repository you want to understand, or pass `-C <dir>`.
@@ -49,6 +67,7 @@ Run these inside the repository you want to understand, or pass `-C <dir>`.
 | `spelunk routes [filter]` | Every HTTP route and the client calls that hit it. |
 | `spelunk risks [--kind k]` | Places bugs hide: swallowed errors, calls to routes that don't exist, import cycles, duplicated code, hotspots, long functions, untested modules, dead files, undocumented env vars, TODOs. |
 | `spelunk explain` | Asks Claude for module summaries, main flows, a run-it-locally guide, a debugging guide and a glossary. Prints the estimated cost and does nothing until you add `--yes`. |
+| `spelunk ui` | The dashboard, above. `--port` to pick a port, `--no-open` to just print the link. |
 | `spelunk scan` | Re-index. Every command already rescans incrementally (only changed files are re-parsed), so you rarely need this. |
 
 `where`, `trace` and `risks` take `--json`.
@@ -94,7 +113,7 @@ scan     walk files (git ls-files when it's a repo) → tree-sitter → symbols,
 analyse  file graph → modules (directories, folded to ≤ 40) → risks, route matching
 query    where (BM25 with synonyms) · trace (call trees from call sites + definitions)
 explain  per-module prompts → Claude → overview prompt → .spelunk/explain.json
-report   HTML / Markdown / MCP / terminal, all from the same Report model
+report   HTML / Markdown / MCP / terminal / dashboard, all from the same Report model
 ```
 
 Everything lives in `.spelunk/` inside the repository, with its own `.gitignore`, so nothing lands in your commits.
@@ -109,7 +128,7 @@ Everything lives in `.spelunk/` inside the repository, with its own `.gitignore`
 ## Development
 
 ```sh
-pnpm test         # vitest: small TypeScript, Python and Go repos, explain with a fake Claude, MCP in memory
+pnpm test         # vitest: small TypeScript, Python and Go repos, explain with a fake Claude, MCP in memory, the dashboard's API
 pnpm typecheck
 pnpm dev where "something" -C ../some-repo
 ```

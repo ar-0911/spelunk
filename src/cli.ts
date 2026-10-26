@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
@@ -31,6 +31,7 @@ Commands
   routes [filter]      HTTP routes and the client calls that hit them
   risks                Smells and risks: swallowed errors, cycles, hotspots, dead code, …
   explain              Ask Claude for module summaries, flows and a debugging guide (shows cost first)
+  ui                   Open the dashboard in your browser: everything above, no commands needed
   mcp                  Run as an MCP server on stdio, for Claude Code and other agents
 
 Options
@@ -45,6 +46,8 @@ Options
   --max-modules <n>    explain: explain at most n modules (default 40)
   --max-chars <n>      explain: source characters sent per module (default 120000)
   --full               scan: reparse every file
+  --port <n>           ui: port to listen on (default: any free port)
+  --no-open            ui: don't open a browser, just print the link
   -h, --help, -v, --version
 `;
 
@@ -64,6 +67,8 @@ async function main(argv: string[]): Promise<number> {
       "max-modules": { type: "string" },
       "max-chars": { type: "string" },
       full: { type: "boolean" },
+      port: { type: "string" },
+      "no-open": { type: "boolean" },
       help: { type: "boolean", short: "h" },
       version: { type: "boolean", short: "v" },
     },
@@ -164,6 +169,14 @@ async function main(argv: string[]): Promise<number> {
       }
       const u = claude.usage;
       return print(`Saved ${relative(process.cwd(), explanationsPath(root))}. ${u.calls} calls (${u.cached} cached), ${u.inputTokens.toLocaleString("en")} in / ${u.outputTokens.toLocaleString("en")} out, about $${estimateCost(u.inputTokens, u.outputTokens).toFixed(2)}.\nNow run \`spelunk map\`.`);
+    }
+    case "ui": {
+      const { startUi } = await import("./ui/server.js");
+      // Started inside a project (or with -C), the dashboard opens it; otherwise it asks for a folder.
+      const inProject = values.cwd !== undefined || existsSync(join(root, ".git")) || ["package.json", "pyproject.toml", "go.mod", "Cargo.toml"].some((f) => existsSync(join(root, f)));
+      const ui = await startUi({ ...(inProject ? { root } : {}), ...(values.port ? { port: Number(values.port) } : {}), open: !values["no-open"], log: (m) => process.stderr.write(`${m}\n`) });
+      process.stdout.write(`Spelunk is running at ${ui.url}\nPress Ctrl+C to stop.\n`);
+      return -1;
     }
     case "mcp": {
       const { serve } = await import("./mcp.js");

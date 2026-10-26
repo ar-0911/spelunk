@@ -18,7 +18,8 @@ function prose(s: string): string {
   return esc(s).replace(/`([^`]+)`/g, "<code>$1</code>").replace(/\*\*([^*]+)\*\*/g, "<b>$1</b>");
 }
 
-const CSS = `
+/** Palette and fonts, shared with the dashboard. */
+export const THEME_CSS = `
 :root {
   --bg: #f6f7f4; --panel: #ffffff; --ink: #1b1f1a; --muted: #5c6459; --line: #dde2d8; --line-strong: #c3cbbd;
   --accent: #2f7d5b; --accent-ink: #1f5c41; --accent-soft: #e4f0e9; --code-bg: #eef1eb; --edge: #8f9a89;
@@ -35,6 +36,10 @@ const CSS = `
   --bg: #111511; --panel: #181d18; --ink: #e5eae2; --muted: #9aa596; --line: #283028; --line-strong: #3a453a;
   --accent: #6fcf9f; --accent-ink: #9fe2bf; --accent-soft: #1b2e24; --code-bg: #141914; --edge: #6d786a;
   --high: #ff8a80; --high-soft: #331816; --medium: #f0b860; --medium-soft: #2e2512; --low: #b6bfb2; --low-soft: #222822; color-scheme: dark; }
+`;
+
+const CSS = `
+${THEME_CSS}
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.6 var(--body); }
