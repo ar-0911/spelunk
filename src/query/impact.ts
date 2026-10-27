@@ -1,4 +1,9 @@
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
+import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
+import { mkdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { promisify } from "node:util";
 import type { Graph } from "../analysis/graph.js";
 import { moduleOf, modules } from "../analysis/modules.js";
@@ -70,6 +75,43 @@ export function parseDiff(diff: string): Omit<ChangedFile, "symbols" | "inIndex"
 /** Where `branch` split off `base`: comparing a working tree with it shows only the branch's own work. */
 export async function mergeBase(root: string, base: string, branch = "HEAD"): Promise<string | undefined> {
   return run("git", ["-C", root, "merge-base", base, branch]).then((r) => r.stdout.trim() || undefined, () => undefined);
+}
+
+/** Local and remote branches, newest commit first, and the one checked out. */
+export async function listBranches(root: string): Promise<{ current: string; branches: string[] }> {
+  const git = (args: string[]) => run("git", ["-C", root, ...args], { maxBuffer: 16 * 1024 * 1024 }).then((r) => r.stdout.trim(), () => "");
+  const current = (await git(["rev-parse", "--abbrev-ref", "HEAD"])) || "HEAD";
+  const refs = (await git(["for-each-ref", "--sort=-committerdate", "--format=%(refname:short)", "refs/heads", "refs/remotes"])).split("\n");
+  return { current, branches: refs.filter((r) => r && !r.endsWith("/HEAD") && r !== "origin").slice(0, 300) };
+}
+
+/**
+ * A snapshot of another branch's files, for comparing branches without
+ * touching the checkout: `git archive` into a temp folder per commit.
+ * Undefined when `ref` is what's checked out, so the live index is used. Only
+ * the latest snapshot per repository is kept.
+ */
+export async function snapshotRef(root: string, ref: string): Promise<{ dir: string; commit: string } | undefined> {
+  if (ref.startsWith("-")) throw new Error(`"${ref}" isn't a branch or commit.`);
+  const sha = (r: string) => run("git", ["-C", root, "rev-parse", "--verify", "--quiet", `${r}^{commit}`]).then((x) => x.stdout.trim(), () => "");
+  const [commit, head] = await Promise.all([sha(ref), sha("HEAD")]);
+  if (!commit) throw new Error(`Can't find "${ref}" in this repository. Fetch it first, or name another branch.`);
+  if (commit === head) return undefined;
+  // Outside the repository: inside it, git would see the snapshot as ignored files and list none of them.
+  const parent = join(tmpdir(), "spelunk-compare", createHash("sha256").update(root).digest("hex").slice(0, 12));
+  const dir = join(parent, commit.slice(0, 12));
+  if (!existsSync(dir)) {
+    await rm(parent, { recursive: true, force: true });
+    await mkdir(dir, { recursive: true });
+    await new Promise<void>((done, fail) => {
+      const archive = spawn("git", ["-C", root, "archive", "--format=tar", commit], { stdio: ["ignore", "pipe", "ignore"] });
+      const tar = spawn("tar", ["-x", "-C", dir], { stdio: ["pipe", "ignore", "ignore"] });
+      archive.stdout.pipe(tar.stdin);
+      tar.on("close", (code) => (code === 0 ? done() : fail(new Error(`Couldn't unpack ${ref}.`))));
+      archive.on("error", fail);
+    });
+  }
+  return { dir, commit };
 }
 
 /** The base to compare with when none is given: the remote default branch, else main or master. */

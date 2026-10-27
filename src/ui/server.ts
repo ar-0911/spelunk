@@ -11,9 +11,9 @@ import { explain, plan } from "../explain/explain.js";
 import { formatOverview } from "../format.js";
 import { agentMarks, agentsOnMap, braidHere, braidInstalled, braidState, errorTask, riskTask, startBraid } from "../integrations/braid.js";
 import { lookupError } from "../query/errors.js";
-import { defaultBase, gitDiff, impact, mergeBase } from "../query/impact.js";
+import { defaultBase, gitDiff, impact, listBranches, mergeBase, snapshotRef } from "../query/impact.js";
 import { resolveTarget, trace } from "../query/trace.js";
-import { where } from "../query/where.js";
+import { where, type Hit } from "../query/where.js";
 import { diagramSvg } from "../report/diagram.js";
 import { publishToElemnt, renderElemnt } from "../report/elemnt.js";
 import { renderHtml } from "../report/html.js";
@@ -219,7 +219,8 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
 
     "GET /api/where": async (q) => {
       const w = await load(false);
-      return where(w.index, q.get("q") ?? "", { limit: 30 });
+      const kinds = (q.get("kind") ?? "").split(",").filter((k): k is Hit["kind"] => ["file", "symbol", "route", "env"].includes(k));
+      return where(w.index, q.get("q") ?? "", { limit: 30, ...(kinds.length ? { kinds } : {}) });
     },
 
     "GET /api/trace": async (q) => {
@@ -280,11 +281,26 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
       }
       const w = await load(false);
       const base = q.get("base")?.trim() || (await defaultBase(w.index.root));
-      const working = q.get("working") === "1";
-      const diff = await gitDiff(w.index.root, base, working ? { includeWorkingTree: true } : {}).catch((err: unknown) => {
+      const headRef = q.get("head")?.trim() || "";
+      const fail = (err: unknown) => {
         throw new HttpError(400, err instanceof Error ? err.message : String(err));
-      });
-      return impact(w.index, w.graph, diff, await w.risks(), { base, head: working ? "working tree" : "HEAD" });
+      };
+      // Another branch: diff against it, and read its own code from a snapshot, so line numbers and functions are that branch's.
+      const snap = headRef ? await snapshotRef(w.index.root, headRef).catch(fail) : undefined;
+      if (snap) {
+        const sw = await openWorkspace(snap.dir, { refresh: true });
+        const diff = await gitDiff(w.index.root, base, { head: snap.commit }).catch(fail);
+        return impact(sw.index, sw.graph, diff, await sw.risks(), { base, head: headRef });
+      }
+      const working = q.get("working") === "1";
+      const diff = await gitDiff(w.index.root, base, working ? { includeWorkingTree: true } : {}).catch(fail);
+      const { current } = await listBranches(w.index.root);
+      return impact(w.index, w.graph, diff, await w.risks(), { base, head: working ? `${current} with uncommitted edits` : current });
+    },
+
+    "GET /api/branches": async () => {
+      const w = await load(false);
+      return { ...(await listBranches(w.index.root)), base: await defaultBase(w.index.root) };
     },
 
     "POST /api/ask": async (_q, body) => {

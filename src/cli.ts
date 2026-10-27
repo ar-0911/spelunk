@@ -12,9 +12,9 @@ import { formatErrorLookup, lookupError } from "./query/errors.js";
 import { agentsOnMap, braidState, errorTask, formatAgents, riskTask, startBraid } from "./integrations/braid.js";
 import { parseFiles } from "./integrations/facts.js";
 import { outlineFiles } from "./integrations/outline.js";
-import { defaultBase, formatImpact, gitDiff, impact, mergeBase } from "./query/impact.js";
+import { defaultBase, formatImpact, gitDiff, impact, mergeBase, snapshotRef } from "./query/impact.js";
 import { resolveTarget, trace } from "./query/trace.js";
-import { where } from "./query/where.js";
+import { where, type Hit } from "./query/where.js";
 import { publishToElemnt, renderElemnt } from "./report/elemnt.js";
 import { renderHtml } from "./report/html.js";
 import { renderMarkdown } from "./report/markdown.js";
@@ -59,7 +59,7 @@ Options
                        BITBUCKET_TOKEN, SPELUNK_GIT_TOKEN)
   -o, --out <file>     map: where to write
   --format html|md     map: output format (default html). impact: md for a PR comment
-  --kind <kind>        risks: only this kind (e.g. swallowed-error, hotspot, orphan)
+  --kind <kind>        risks: only this kind (e.g. swallowed-error, hotspot, orphan); where: symbol, file, route or env
   --limit <n>          where/risks: how many results
   --depth <n>          trace: how deep to follow calls (default 2)
   --json               Print JSON instead of text (where, trace, risks, error, impact, tour, ask, overview, agents)
@@ -175,7 +175,9 @@ async function main(argv: string[]): Promise<number> {
     case "where": {
       if (!text) return fail('Say what to look for: spelunk where "password reset email"');
       const ws = await open();
-      const hits = where(ws.index, text, { limit: num(values.limit) ?? 15 });
+      const kinds = values.kind?.split(",").map((k) => k.trim());
+      if (kinds?.some((k) => !["file", "symbol", "route", "env"].includes(k))) return fail("--kind for where is file, symbol, route or env (comma-separated).");
+      const hits = where(ws.index, text, { limit: num(values.limit) ?? 15, ...(kinds ? { kinds: kinds as Hit["kind"][] } : {}) });
       return print(values.json ? JSON.stringify(hits, null, 2) : formatHits(text, hits));
     }
     case "trace": {
@@ -245,9 +247,11 @@ async function main(argv: string[]): Promise<number> {
         const result = impact(ws.index, ws.graph, diff, await ws.risks(), { base: text || a.base, head: `${a.name} (${a.branch}, with uncommitted edits)` });
         return print(values.json ? JSON.stringify(result, null, 2) : formatImpact(result));
       }
-      const ws = await open();
+      // Another branch's changes are read from that branch's own code, so functions and line numbers match it.
+      const snap = values.head && !values.working ? await snapshotRef(root, values.head) : undefined;
+      const ws = snap ? await openWorkspace(snap.dir, { refresh: true }) : await open();
       const base = text || (await defaultBase(root));
-      const diff = await gitDiff(root, base, { ...(values.working ? { includeWorkingTree: true } : {}), ...(values.head ? { head: values.head } : {}) });
+      const diff = await gitDiff(root, base, { ...(values.working ? { includeWorkingTree: true } : {}), ...(values.head ? { head: snap?.commit ?? values.head } : {}) });
       const result = impact(ws.index, ws.graph, diff, await ws.risks(), { base, head: values.working ? "working tree" : values.head || "HEAD" });
       return print(values.json ? JSON.stringify(result, null, 2) : formatImpact(result));
     }

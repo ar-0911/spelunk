@@ -176,6 +176,21 @@ export async function scan(rootArg: string, options: ScanOptions = {}): Promise<
       if (target && !target.entry) target.entry = c.name;
     }
   }
+  // moleculer-runner loads services by convention: `moleculer-runner services` starts every *.service.js under services/.
+  for (const m of manifests) {
+    for (const c of m.commands) {
+      const run = c.command.match(/\bmoleculer-runner\b(.*)/);
+      if (!run) continue;
+      const base = posix.dirname(m.path) === "." ? "" : `${posix.dirname(m.path)}/`;
+      const dirs = run[1]!.split(/\s+/).filter((a) => a && !a.startsWith("-") && !/[&|;]/.test(a)).map((a) => base + a.replace(/^\.\/|\/+$/g, ""));
+      for (const f of files) {
+        if (f.entry || f.role === "test") continue;
+        const loaded = /\.service\.[cm]?[jt]s$/.test(f.path) && (!dirs.length || dirs.some((d) => f.path.startsWith(`${d}/`) || f.path === d));
+        if (loaded) f.entry = `moleculer service (${c.name})`;
+        else if (/(^|\/)moleculer\.config\.[cm]?[jt]s$/.test(f.path)) f.entry = `moleculer config (${c.name})`;
+      }
+    }
+  }
 
   return {
     version: INDEX_VERSION,
