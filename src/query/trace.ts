@@ -50,6 +50,8 @@ export interface Trace {
   /** Import chains from entry points to the target, shortest first. */
   fromEntries: string[][];
   calls: CallStats;
+  /** Why the flow is empty when Spelunk knows something about it (a route mapped to an action it can't find). */
+  note?: string;
 }
 
 export interface TraceTarget {
@@ -356,7 +358,19 @@ export function trace(index: Index, g: Graph, t: TraceTarget, options: { depth?:
   const flow = t.kind === "file" ? [] : callTree(index, g, t.path, names, depth + 1, seen, calls);
   calls.unresolved = [...new Set(calls.unresolved)];
 
+  let note: string | undefined;
+  const handler = t.route?.handler;
+  if (handler?.startsWith("svc:") && !brokerTargets(index).has(handler)) {
+    const name = handler.slice(4);
+    const svc = name.slice(0, name.lastIndexOf("."));
+    const known = [...new Set([...brokerTargets(index).keys()].map((k) => k.slice(4, k.lastIndexOf("."))))];
+    note = known.some((k) => name.startsWith(`${k}.`))
+      ? `It runs the action "${name}". That service is here, but has no action by that name: it may come from a mixin (moleculer-db adds list, get, create, update, remove) or be added at runtime.`
+      : `It runs the action "${name}", but no service named "${svc}" is defined in this repository${known.length ? "" : " (Spelunk found no Moleculer services at all)"}. It may live in another repository, come from a mixin, or be named differently (a service's version adds a "v1." prefix).`;
+  }
+
   return {
+    ...(note ? { note } : {}),
     target: { kind: t.kind, label: t.label, path: t.path, ...(t.line ? { line: t.line } : {}) },
     callers,
     usedBy,

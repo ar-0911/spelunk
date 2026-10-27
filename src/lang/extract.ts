@@ -1,5 +1,5 @@
 import type { Node, Tree } from "web-tree-sitter";
-import type { ImportRef, Located, SymbolInfo, SymbolKind } from "../types.js";
+import type { ImportRef, Located, Route, SymbolInfo, SymbolKind } from "../types.js";
 
 /** Facts that need a syntax tree. Everything else comes from lines (see scan/detect.ts). */
 export interface TreeFacts {
@@ -9,6 +9,8 @@ export interface TreeFacts {
   callSites: [string, number][];
   /** Lines covered by calls that register a route ("/path" as first argument). */
   spans: [number, number][];
+  /** Routes declared on Moleculer actions (`rest: "GET /hello"`), under the service's base path. */
+  routes: Route[];
   swallowed: Located[];
   doc?: string;
   parseErrors: number;
@@ -58,6 +60,31 @@ function lastSegment(text: string): string | undefined {
  * receiver is what lets tracing tell a module or class call from a method on
  * some local object; "?" means the receiver isn't a plain name (a chained call).
  */
+const joinUrl = (...parts: string[]) => `/${parts.join("/").split("/").filter(Boolean).join("/")}`;
+
+/** An action's `rest`: "GET /hello", "/hello", { method, path }, or a list of those. */
+function restOf(prop: Node): { method: string; path: string; line: number }[] {
+  const def = prop.type === "pair" ? prop.childForFieldName("value") : null;
+  const rest = def?.type === "object" ? def.namedChildren.find((c) => c?.type === "pair" && propName(c) === "rest")?.childForFieldName("value") : null;
+  if (!rest) return [];
+  const one = (n: Node | null): { method: string; path: string; line: number }[] => {
+    if (!n) return [];
+    const line = n.startPosition.row + 1;
+    const text = stringValue(n);
+    if (text !== undefined) {
+      const m = text.trim().match(/^(?:([A-Za-z]+)\s+)?(.*)$/)!;
+      return [{ method: (m[1] ?? "ALL").toUpperCase(), path: m[2] ?? "", line }];
+    }
+    if (n.type === "object") {
+      const get = (k: string) => stringValue(n.namedChildren.find((c) => c?.type === "pair" && propName(c) === k)?.childForFieldName("value") ?? null);
+      return [{ method: (get("method") ?? "ALL").toUpperCase(), path: get("path") ?? get("fullPath") ?? "", line }];
+    }
+    if (n.type === "array") return n.namedChildren.flatMap((c) => one(c));
+    return [];
+  };
+  return one(rest);
+}
+
 /** The key of an object property or method: `create`, `"user.created"`, `'GET /x'`. */
 function propName(node: Node): string | undefined {
   const key = node.childForFieldName("key") ?? node.childForFieldName("name");
@@ -184,6 +211,7 @@ export function extract(tree: Tree, lang: string): TreeFacts {
   const calls = new Set<string>();
   const callSites: [string, number][] = [];
   const spans: [number, number][] = [];
+  const routes: Route[] = [];
   /** Local names bound to a freshly built object (`const s = new UserService()`), so `s.find()` can resolve to UserService.find. File-wide, not scoped. */
   const made = new Map<string, string>();
   const swallowed: Located[] = [];
@@ -228,6 +256,10 @@ export function extract(tree: Tree, lang: string): TreeFacts {
     if (!name || !sections.length) return false;
     const version = value("version");
     const svc = version ? `${version.type === "number" ? `v${version.text}` : stringValue(version) ?? version.text}.${name}` : name;
+    // moleculer-web's base path for this service's `rest` actions: settings.rest, else /v1/name.
+    const settings = value("settings");
+    const restBase = settings?.type === "object" ? stringValue(settings.namedChildren.find((c) => c?.type === "pair" && propName(c) === "rest")?.childForFieldName("value") ?? null) : undefined;
+    const base = restBase ?? `/${svc.replace(/\./g, "/")}`;
     for (const child of node.namedChildren) {
       if (!child) continue;
       const section = child.type === "pair" ? propName(child) : undefined;
@@ -254,6 +286,7 @@ export function extract(tree: Tree, lang: string): TreeFacts {
         const doc = docAbove(prop);
         if (doc) sym.doc = doc;
         symbols.push(sym);
+        if (section === "actions") for (const r of restOf(prop)) routes.push({ side: "server", method: r.method, path: joinUrl(base, r.path), line: r.line, framework: "moleculer-rest", handler: `svc:${svc}.${pname}` });
         walk(prop, svc, depth + 1, true);
       }
     }
@@ -505,7 +538,7 @@ export function extract(tree: Tree, lang: string): TreeFacts {
     if (inside.length) sym.calls = inside.slice(0, 60);
   }
 
-  return { symbols, imports, calls: [...calls].sort(), callSites, spans, swallowed, ...(doc ? { doc } : {}), parseErrors };
+  return { symbols, imports, calls: [...calls].sort(), callSites, spans, routes, swallowed, ...(doc ? { doc } : {}), parseErrors };
 }
 
 /** Local names an ES import (or re-export) binds: `import d, * as ns, { a as b } from "…"`. */

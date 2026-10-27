@@ -50,6 +50,8 @@ export interface Route {
   framework: string;
   /** The handler's name when it is a named reference rather than an inline function. */
   handler?: string;
+  /** Moleculer `rest` routes: the path under the service, before the gateway's prefix. */
+  servicePath?: string;
 }
 
 export interface Located {
@@ -81,6 +83,8 @@ export interface FileFacts {
   size?: number;
   mtime?: number;
   routes: Route[];
+  /** A moleculer-web gateway route with `autoAliases`: the path the services' `rest` actions are served under. */
+  restPrefix?: string;
   /** Environment variables read here. */
   env: Located[];
   /** TODO / FIXME / HACK / XXX comments. */
@@ -127,4 +131,4 @@ export interface Index {
   only?: string[];
 }
 
-export const INDEX_VERSION = 5;
+export const INDEX_VERSION = 6;

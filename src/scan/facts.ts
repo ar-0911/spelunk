@@ -38,6 +38,7 @@ export async function factsFor(path: string, source: string, hash: string): Prom
       calls: t.calls,
       callSites: t.callSites,
       ...(t.spans.length ? { spans: t.spans } : {}),
+      routes: [...base.routes, ...t.routes],
       swallowed: t.swallowed,
       ...(t.doc ? { doc: t.doc } : {}),
       ...(t.parseErrors ? { parseErrors: t.parseErrors } : {}),
