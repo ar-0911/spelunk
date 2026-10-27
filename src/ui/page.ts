@@ -117,6 +117,10 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .dirs { max-height: 320px; overflow-y: auto; border: 1px solid var(--line); border-radius: 8px; }
 .dirs button { display: block; width: 100%; text-align: left; border: 0; border-bottom: 1px solid var(--line); background: none; padding: 7px 12px; cursor: pointer; font: 13px var(--mono); }
 .dirs button:hover { background: var(--accent-soft); }
+.dirrow { display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+.dirrow > button:first-child { border-bottom: 0; flex: 1; }
+.dirrow .btn { margin: 3px 8px; padding: 2px 10px; font-size: 12.5px; width: auto; }
+.crumbs { font: 12.5px var(--mono); overflow-wrap: anywhere; }
 .welcome { max-width: 640px; margin: 8vh auto 0; text-align: left; }
 .welcome ol { padding-left: 20px; color: var(--muted); }
 .progress { height: 8px; border-radius: 4px; background: var(--line); max-width: 560px; overflow: hidden; margin-top: 14px; }
@@ -218,17 +222,37 @@ function renderWelcome() {
     '<p style="margin-top:20px"><button class="btn primary" data-pick>Choose a project folder</button></p><ol><li>Pick the folder that holds the code (the one with package.json, pyproject.toml, go.mod or .git).</li><li>Spelunk reads it locally. Nothing leaves your computer unless you ask Claude to explain it.</li><li>Or paste a GitHub, GitLab or Bitbucket link and Spelunk downloads it for you.</li><li>New here? Start with First day. Looking for something? Use Find or Ask.</li></ol></div>';
 }
 
-let pickerDir = "";
+let pickerDir = "", pickerDirs = [], pickerParent = null;
+const recentFolders = () => { try { return JSON.parse(localStorage.getItem("spelunk.recent") || "[]"); } catch { return []; } };
+function rememberFolder(path) {
+  try { localStorage.setItem("spelunk.recent", JSON.stringify([path, ...recentFolders().filter((p) => p !== path)].slice(0, 6))); } catch {}
+}
 async function openPicker(dir) {
   const d = $("#picker");
   if (!d.open) d.showModal();
   try {
     const r = await api("/api/browse?dir=" + encodeURIComponent(dir || state.root || state.home));
     pickerDir = r.dir;
+    pickerDirs = r.dirs;
+    pickerParent = r.parent;
     $("#pickpath").value = r.dir;
-    $("#pickhint").textContent = r.looksLikeRepo ? "This looks like a project folder." : "Open a folder below, or type a path.";
-    $("#dirs").innerHTML = (r.parent ? '<button data-dir="' + esc(r.parent) + '">↑ ..</button>' : "") + r.dirs.map((n) => '<button data-dir="' + esc(r.dir.replace(/\/$/, "") + "/" + n) + '">' + esc(n) + "/</button>").join("") || '<p class="muted" style="padding:8px 12px">No folders here.</p>';
+    $("#pickfilter").value = "";
+    $("#pickhint").textContent = r.looksLikeRepo ? "This looks like a project folder. Use it, or open one below." : "Open a folder below, type or paste a path, or jump with the shortcuts.";
+    const recent = recentFolders().filter((p) => p !== r.dir).slice(0, 4);
+    $("#pickshort").innerHTML = r.shortcuts.map((x) => '<button type="button" class="chip" data-dir="' + esc(x.path) + '">' + esc(x.label) + "</button>").join("") +
+      recent.map((p) => '<button type="button" class="chip" data-dir="' + esc(p) + '" title="' + esc(p) + '">' + esc(p.split("/").filter(Boolean).pop() || p) + "</button>").join("");
+    // "/ › home › adi › code": each part clickable, except the folder you're in.
+    $("#crumbs").innerHTML = r.crumbs.map((c, i) => (c.path && i < r.crumbs.length - 1 ? '<button type="button" class="lnk" data-dir="' + esc(c.path) + '">' + esc(c.name) + "</button>" : "<b>" + esc(c.name) + "</b>")).join('<span class="muted"> › </span>');
+    renderDirs();
   } catch (e) { $("#pickhint").textContent = e.message; }
+}
+function renderDirs() {
+  const f = $("#pickfilter").value.trim().toLowerCase();
+  const list = pickerDirs.filter((x) => !f || x.name.toLowerCase().includes(f));
+  const base = pickerDir.replace(/\/$/, "") + "/";
+  $("#dirs").innerHTML = (pickerParent && !f ? '<div class="dirrow"><button type="button" data-dir="' + esc(pickerParent) + '">↑ Up to ' + esc(pickerParent) + "</button></div>" : "") + list.map((x) => '<div class="dirrow"><button type="button" data-dir="' + esc(base + x.name) + '">' + esc(x.name) + "/" + (x.project ? ' <span class="tag">project</span>' : "") + "</button>" +
+    (x.project ? '<button type="button" class="btn" data-usedir="' + esc(base + x.name) + '">Open</button>' : "") + "</div>").join("") ||
+    '<p class="muted" style="padding:8px 12px">' + (f ? "No folder here matches." : "No folders here.") + "</p>";
 }
 
 async function useFolder(path) {
@@ -239,6 +263,7 @@ async function useFolder(path) {
   go("overview");
   try {
     await api("/api/open", { root: path });
+    rememberFolder(path);
     await refresh();
   } catch (e) { $("#main").innerHTML = '<div class="view"><div class="note err">' + esc(e.message) + '</div><button class="btn" data-pick>Choose another folder</button></div>'; }
 }
@@ -347,11 +372,12 @@ async function runTrace(target) {
     let h = '<div class="card" style="margin-bottom:14px"><h3 style="margin-top:0"><span class="tag">' + esc(t.target.kind) + "</span> " + esc(t.target.label) + "</h3><div>" + loc(t.target.path, t.target.line) + "</div>";
     if (t.callers.length) h += "<h3>Called from the front end</h3>" + t.callers.map((c) => "<div>" + loc(c.path, c.line) + ' <span class="muted mono" style="font-size:12px">' + esc(c.label) + "</span></div>").join("");
     if (t.fromEntries.length) h += "<h3>How the program gets here</h3>" + t.fromEntries.map((p) => '<div class="chain">' + p.map((x) => loc(x)).join('<span class="arrow">→</span>') + "</div>").join("");
+    if (t.note) h += '<div class="note" style="margin-top:10px">' + esc(t.note) + "</div>";
     if (t.flow.length) h += "<h3>What it calls</h3>" + tree(t.flow, true);
     if (t.calls && t.target.kind !== "file" && t.calls.resolved + t.calls.byName + t.calls.library + t.calls.unresolved.length) h += callStats(t.calls);
     if (t.downstream.length) h += "<h3>What it uses</h3>" + steps(t.downstream, true);
     if (t.usedBy.length) h += "<h3>Used by (" + t.usedBy.length + ")</h3>" + t.usedBy.slice(0, 40).map((u) => "<div>" + loc(u.path, u.line) + "</div>").join("");
-    if (!t.callers.length && !t.flow.length && !t.downstream.length && !t.usedBy.length && !t.fromEntries.length) h += '<p class="muted" style="margin-top:10px">No connections found. It may be reached by name at runtime, or by a framework convention.</p>';
+    if (!t.note && !t.callers.length && !t.flow.length && !t.downstream.length && !t.usedBy.length && !t.fromEntries.length) h += '<p class="muted" style="margin-top:10px">No connections found. It may be reached by name at runtime, or by a framework convention.</p>';
     return h + "</div>";
   }).join("") + (more.length ? '<p class="muted">Also matches: ' + more.map((m) => loc(m.path, m.line, m.label + " (" + m.path + ")")).join(", ") + "</p>" : "");
 }
@@ -775,6 +801,7 @@ document.addEventListener("click", async (e) => {
     if (d.agentimpact) { agentPick = d.agentimpact; return go("changes"); }
     if (d.pick !== undefined) return openPicker();
     if (d.dir) return openPicker(d.dir);
+    if (d.usedir) return useFolder(d.usedir);
     if (d.tab) return showTab(d.tab);
     if (t.id === "rescan") { t.disabled = true; t.textContent = "Reading…"; await api("/api/rescan", {}); await refresh(); return; }
     if (t.id === "dclose") return closeFile();
@@ -785,6 +812,10 @@ $("#scrim").addEventListener("click", closeFile);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeFile(); if (e.key === "/" && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); go("find"); } });
 $("#pickform").addEventListener("submit", (e) => { e.preventDefault(); useFolder($("#pickpath").value || pickerDir); });
 $("#browse").addEventListener("click", () => openPicker($("#pickpath").value));
+// Enter in the path box goes to that folder; "Use this folder" opens it.
+$("#pickpath").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); openPicker($("#pickpath").value); } });
+$("#pickfilter").addEventListener("input", renderDirs);
+$("#pickfilter").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); const first = $("#dirs [data-dir]"); if (first) openPicker(first.dataset.dir); } });
 $("#cloneurl").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); useLink(); } });
 try { const th = localStorage.getItem("spelunk-theme"); if (th) document.documentElement.dataset.theme = th; } catch {}
 
@@ -832,8 +863,11 @@ export function dashboardHtml(): string {
 <dialog id="picker" aria-label="Choose a project folder">
   <form class="dlg" id="pickform">
     <h2 style="margin:0">Choose a project folder</h2>
-    <div style="display:flex;gap:8px"><input class="field" id="pickpath" aria-label="Folder path" style="flex:1"><button type="button" class="btn" id="browse">Go</button></div>
+    <div class="chips" id="pickshort" style="margin:0"></div>
+    <div style="display:flex;gap:8px"><input class="field" id="pickpath" aria-label="Folder path" placeholder="Type or paste a path, e.g. ~/code/my-app" style="flex:1;max-width:none"><button type="button" class="btn" id="browse">Go</button></div>
+    <div class="crumbs" id="crumbs"></div>
     <p class="muted" id="pickhint" style="margin:0;font-size:13px"></p>
+    <input class="field" id="pickfilter" type="search" placeholder="Filter these folders" aria-label="Filter folders" autocomplete="off" style="max-width:none">
     <div class="dirs" id="dirs"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button><button class="btn primary">Use this folder</button></div>
     <div class="orline">or paste a repository link</div>

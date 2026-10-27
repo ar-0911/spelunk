@@ -172,3 +172,106 @@ describe("comparing two branches", () => {
     await expect(snapshotRef(root, "nope")).rejects.toThrow(/Can't find "nope"/);
   });
 });
+
+describe("Moleculer gateway shapes from real apps", async () => {
+  const ix = await scan(
+    await repo({
+      "package.json": JSON.stringify({ name: "partner", scripts: { dev: "moleculer-runner services" } }),
+      "src/services/integration.service.js": `
+const ApiGateway = require("moleculer-web");
+const integrationConfig = { cors: true };
+
+module.exports = {
+	name: "integration",
+	mixins: [ApiGateway],
+	settings: {
+		routes: [
+			{
+				path: "/health",
+				...integrationConfig,
+				aliases: {
+					"GET ping": "health.check",
+				},
+			},
+			{
+				path: "/",
+				whitelist: ["v1.extpartner.access.initiate"],
+				...integrationConfig,
+				aliases: {
+					"POST /partner/api/v1/access/entry":
+						"v1.extpartner.access.initiate",
+					"GET /partner/api/v1/missing": "v1.extpartner.nothing",
+				},
+			},
+			{
+				path: "/api",
+				autoAliases: true,
+			},
+		],
+	},
+};
+`,
+      "src/services/extpartner.service.js": `
+module.exports = {
+	name: "extpartner",
+	version: 1,
+	actions: {
+		"access.initiate": {
+			handler(ctx) {
+				return this.startSession(ctx.params);
+			},
+		},
+		hello: {
+			rest: "GET /hello",
+			handler() {
+				return "hi";
+			},
+		},
+	},
+	methods: {
+		startSession(p) {
+			return p;
+		},
+	},
+};
+`,
+      "src/services/greeter.service.js": `
+module.exports = {
+	name: "greeter",
+	settings: { rest: "/greet" },
+	actions: {
+		welcome: {
+			rest: ["POST /welcome", { method: "GET", path: "/welcome" }],
+			handler(ctx) {
+				return ctx.params.name;
+			},
+		},
+	},
+};
+`,
+    }),
+  );
+  const g = buildGraph(ix);
+  const flat = (n: { name: string; children: never[] }[]): string[] => n.flatMap((x) => [x.name, ...flat(x.children)]);
+  const routes = allRoutes(ix, "server").map((r) => `${r.method} ${r.path} ${r.handler ?? ""}`.trim());
+
+  it("reads an alias whose action is on the next line, and one without a slash", () => {
+    expect(routes).toContain("POST /partner/api/v1/access/entry svc:v1.extpartner.access.initiate");
+    expect(routes).toContain("GET /health/ping svc:health.check");
+    const [t] = resolveTarget(ix, "POST /partner/api/v1/access/entry");
+    expect(t?.line).toBe(21);
+    expect(flat(trace(ix, g, t!).flow as never)).toEqual(["v1.extpartner.access.initiate", "v1.extpartner.startSession"]);
+  });
+
+  it("serves actions' `rest` under the service's path and the gateway's autoAliases route", () => {
+    expect(routes).toEqual(expect.arrayContaining(["GET /api/v1/extpartner/hello svc:v1.extpartner.hello", "POST /api/greet/welcome svc:greeter.welcome", "GET /api/greet/welcome svc:greeter.welcome"]));
+    const [t] = resolveTarget(ix, "GET /api/v1/extpartner/hello");
+    expect(flat(trace(ix, g, t!).flow as never)).toEqual(["v1.extpartner.hello"]);
+  });
+
+  it("says why a route goes nowhere when its action isn't in the repo", () => {
+    const note = (target: string) => trace(ix, g, resolveTarget(ix, target)[0]!).note;
+    expect(note("GET /partner/api/v1/missing")).toMatch(/runs the action "v1\.extpartner\.nothing"\. That service is here, but has no action by that name/);
+    expect(note("GET /health/ping")).toMatch(/no service named "health" is defined in this repository/);
+  });
+});

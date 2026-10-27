@@ -43,12 +43,13 @@ export function formatTrace(t: Trace): string {
   const out = [`${t.target.kind} ${t.target.label}  ${loc(t.target.path, t.target.line)}`];
   if (t.callers.length) out.push("", "Called from (client code):", ...t.callers.map((c) => `  ${loc(c.path, c.line)}  ${c.label}`));
   if (t.fromEntries.length) out.push("", "Reached from entry points:", ...t.fromEntries.map((p) => `  ${p.join(" → ")}`));
+  if (t.note) out.push("", t.note);
   if (t.flow.length) out.push("", "What it calls:", ...callTree(t.flow));
   const c = t.calls;
   if (t.target.kind !== "file" && c.resolved + c.byName + c.library + c.unresolved.length) out.push("", callStats(c));
   if (t.downstream.length) out.push("", "What it imports:", ...steps(t.downstream));
   if (t.usedBy.length) out.push("", `Used by (${t.usedBy.length}):`, ...t.usedBy.slice(0, 30).map((u) => `  ${loc(u.path, u.line)}`), ...(t.usedBy.length > 30 ? [`  … and ${t.usedBy.length - 30} more`] : []));
-  if (out.length === 1) out.push("", "No callers, calls or imports found. It may be reached dynamically (reflection, a string lookup, a framework convention).");
+  if (out.length === 1 && !t.note) out.push("", "No callers, calls or imports found. It may be reached dynamically (reflection, a string lookup, a framework convention).");
   return out.join("\n");
 }
 

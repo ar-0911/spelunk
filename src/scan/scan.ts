@@ -176,6 +176,17 @@ export async function scan(rootArg: string, options: ScanOptions = {}): Promise<
       if (target && !target.entry) target.entry = c.name;
     }
   }
+  // moleculer-web `autoAliases`: action `rest` routes are served under the gateway route's path.
+  const restPrefix = files.find((f) => f.restPrefix !== undefined)?.restPrefix;
+  for (const f of files) {
+    for (const r of f.routes) {
+      if (r.framework !== "moleculer-rest") continue;
+      // The path as the service wrote it is kept, so a reused file isn't prefixed twice.
+      r.servicePath ??= r.path;
+      r.path = restPrefix && restPrefix !== "/" ? `${restPrefix}${r.servicePath === "/" ? "" : r.servicePath}` : r.servicePath;
+    }
+  }
+
   // moleculer-runner loads services by convention: `moleculer-runner services` starts every *.service.js under services/.
   for (const m of manifests) {
     for (const c of m.commands) {

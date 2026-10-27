@@ -3,7 +3,7 @@ import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { homedir } from "node:os";
-import { dirname, join, resolve, sep } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { RISK_INFO } from "../analysis/risks.js";
 import { ask, ClaudeAsk, type AskResult, type AskStep } from "../explain/ask.js";
 import { Claude, ClaudeError, MODEL, costText } from "../explain/claude.js";
@@ -66,6 +66,8 @@ class HttpError extends Error {
 }
 
 const MAX_SOURCE = 400_000;
+
+const PROJECT_MARKERS = new Set([".git", "package.json", "pyproject.toml", "go.mod", "Cargo.toml", "pom.xml", "build.gradle", "Gemfile", "composer.json", "requirements.txt", "setup.py", "mix.exs"]);
 
 /** True when `path`, with every symlink followed, is `dir` or inside it. */
 export async function within(dir: string, path: string): Promise<boolean> {
@@ -176,10 +178,23 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
       const entries = await readdir(dir, { withFileTypes: true }).catch(() => {
         throw new HttpError(400, `Can't read ${dir}.`);
       });
-      const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules").map((e) => e.name).sort((a, b) => a.localeCompare(b));
-      const looksLikeRepo = entries.some((e) => [".git", "package.json", "pyproject.toml", "go.mod", "Cargo.toml", "pom.xml"].includes(e.name));
+      const names = entries.filter((e) => e.isDirectory() && !e.name.startsWith(".") && e.name !== "node_modules").map((e) => e.name).sort((a, b) => a.localeCompare(b));
+      // Mark folders that hold a project, so they can be opened straight from the list.
+      const dirs = await Promise.all(
+        names.slice(0, 500).map(async (name) => ({ name, project: await readdir(join(dir, name)).then((xs) => xs.some((x) => PROJECT_MARKERS.has(x)), () => false) })),
+      );
+      const looksLikeRepo = entries.some((e) => PROJECT_MARKERS.has(e.name));
       const up = dirname(dir);
-      return { dir, parent: up !== dir && (await reachable(up)) ? up : null, dirs, looksLikeRepo };
+      // Every folder from / down to this one, each clickable when the picker may go there.
+      const crumbs: { name: string; path: string | null }[] = [];
+      for (let p = dir; ; p = dirname(p)) {
+        crumbs.unshift({ name: p === dirname(p) ? p : basename(p), path: (await reachable(p)) ? p : null });
+        if (p === dirname(p)) break;
+      }
+      const shortcuts = [{ label: "Home", path: homedir() }];
+      if (root) shortcuts.push({ label: "Current project", path: root }, { label: "Next to it", path: dirname(root) });
+      if (await stat(reposDir()).then((x) => x.isDirectory(), () => false)) shortcuts.push({ label: "Downloaded repos", path: reposDir() });
+      return { dir, parent: up !== dir && (await reachable(up)) ? up : null, dirs, looksLikeRepo, crumbs, shortcuts: (await Promise.all(shortcuts.map(async (x) => ((await reachable(x.path)) ? x : null)))).filter(Boolean) };
     },
 
     "GET /api/report": async () => {

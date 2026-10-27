@@ -160,9 +160,9 @@ Symbols, imports and calls: TypeScript, JavaScript, Python, Go, Rust, Java, Kotl
 
 Imports resolve to files for TypeScript and JavaScript (including tsconfig paths and workspace packages), Python, Go (via go.mod), Rust, the JVM languages, Ruby, C and C++, and PHP (PSR-4).
 
-Routes: Express, Hono, Fastify, Koa and similar, `fetch` and axios clients, Flask, FastAPI (with `APIRouter` prefixes), Django, Go `net/http`, gin and chi, Spring, axum, actix, Rails, Sinatra, Laravel, ASP.NET and moleculer-web gateways (`aliases`, including `REST` shorthands, under the route's `path`).
+Routes: Express, Hono, Fastify, Koa and similar, `fetch` and axios clients, Flask, FastAPI (with `APIRouter` prefixes), Django, Go `net/http`, gin and chi, Spring, axum, actix, Rails, Sinatra, Laravel, ASP.NET and moleculer-web gateways (`aliases`, including `REST` shorthands, under the route's `path`; actions' `rest` under the service's path and the `autoAliases` route).
 
-Moleculer: a service schema's actions, events and methods are symbols under the service name (`users.get`, `v2.users.get`). `ctx.call("users.get")`, `broker.call`, `ctx.emit` and `this.actions.x()` are followed to the action, an action's trace lists every place that calls it by name, and the services `moleculer-runner` loads count as entry points.
+Moleculer: a service schema's actions, events and methods are symbols under the service name (`users.get`, `v2.users.get`). `ctx.call("users.get")`, `broker.call`, `ctx.emit` and `this.actions.x()` are followed to the action, an action's trace lists every place that calls it by name, and the services `moleculer-runner` loads count as entry points. When a route maps to an action that isn't in the repository (a mixin's, or another repo's), its trace says so.
 
 Project files: package.json, pyproject.toml, requirements.txt, setup.py, go.mod, Cargo.toml, pom.xml, Gradle, Gemfile, Dockerfiles, compose files, CI workflows, Makefiles and `.env` examples.
 

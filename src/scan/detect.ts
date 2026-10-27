@@ -174,6 +174,7 @@ export interface LineFacts {
   throws: Located[];
   logs: Located[];
   entry?: string;
+  restPrefix?: string;
 }
 
 const clip = (s: string, n = 140) => (s.length > n ? `${s.slice(0, n - 1)}…` : s);
@@ -253,11 +254,13 @@ export function detectLines(path: string, lang: string, source: string, lineComm
     }
   }
   if (lang === "python") applyRouterPrefixes(source, lines, routes);
-  if (/^(javascript|typescript|tsx)$/.test(lang) && /\baliases\s*:/.test(source)) moleculerRoutes(lines, routes);
-  return { routes, env, notes, throws, logs, ...(entry ? { entry } : {}) };
+  let restPrefix: string | undefined;
+  if (/^(javascript|typescript|tsx)$/.test(lang) && /\b(aliases|autoAliases)\s*:/.test(source)) restPrefix = moleculerRoutes(lines, routes);
+  return { routes, env, notes, throws, logs, ...(entry ? { entry } : {}), ...(restPrefix !== undefined ? { restPrefix } : {}) };
 }
 
-const ALIAS = /^\s*["'`](?:(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|ALL|REST)\s+)?(\/[^"'`]*)["'`]\s*(?::|\()\s*(.*)$/i;
+// "GET /users", "/users" and "GET users" (moleculer-web adds the slash).
+const ALIAS = /^\s*["'`](?:(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS|ALL|REST)\s+(\/?[^"'`\s]*)|(\/[^"'`]*))["'`]\s*(?::|\()\s*(.*)$/i;
 /** moleculer-web's REST shorthand: "REST /users": "users" expands to these. */
 const REST: [string, string, string][] = [["GET", "", "list"], ["GET", "/:id", "get"], ["POST", "", "create"], ["PUT", "/:id", "update"], ["PATCH", "/:id", "patch"], ["DELETE", "/:id", "remove"]];
 
@@ -268,7 +271,8 @@ const joinPaths = (...parts: string[]) => `/${parts.join("/").split("/").filter(
  * `routes: [{ path: "/api", … }]`, under the gateway's own `settings.path`. Each
  * alias maps a URL to an action, so its handler is that action ("svc:users.get").
  */
-function moleculerRoutes(lines: string[], routes: Route[]): void {
+function moleculerRoutes(lines: string[], routes: Route[]): string | undefined {
+  let autoPrefix: string | undefined;
   let global = "";
   let route = "";
   let inRoutes = false;
@@ -285,6 +289,8 @@ function moleculerRoutes(lines: string[], routes: Route[]): void {
       inAliases = false;
       continue;
     }
+    // `autoAliases: true` serves every action's `rest` under this route's path.
+    if (/^autoAliases\s*:\s*true/.test(line) && autoPrefix === undefined) autoPrefix = joinPaths(global, route);
     if (/^aliases\s*:/.test(line)) {
       inAliases = true;
       continue;
@@ -293,8 +299,11 @@ function moleculerRoutes(lines: string[], routes: Route[]): void {
     const m = raw.match(ALIAS);
     if (!m) continue;
     const method = (m[1] ?? "ALL").toUpperCase();
-    const url = joinPaths(global, route, m[2]!);
-    const strings = [...m[3]!.matchAll(/["'`]([\w$.-]+)["'`]/g)].map((x) => x[1]!);
+    const url = joinPaths(global, route, m[2] ?? m[3]!);
+    // Formatters put a long action name on the next line: "POST /x":\n  "v1.svc.action",
+    let value = m[4]!;
+    for (let j = i + 1; !/["'`(]|=>|function/.test(value) && j < Math.min(lines.length, i + 4); j++) value += ` ${lines[j]!.trim()}`;
+    const strings = [...value.matchAll(/["'`]([\w$.-]+)["'`]/g)].map((x) => x[1]!);
     const action = strings[strings.length - 1];
     const n = i + 1;
     if (method === "REST" && action) {
@@ -303,6 +312,7 @@ function moleculerRoutes(lines: string[], routes: Route[]): void {
       routes.push({ side: "server", method: method === "ALL" ? "ALL" : method, path: url, line: n, framework: "moleculer", ...(action && action.includes(".") ? { handler: `svc:${action}` } : {}) });
     }
   }
+  return autoPrefix;
 }
 
 /** `methods=["GET", "POST"]` or `methods=("POST",)` → "GET,POST"; Flask's default is GET. */
