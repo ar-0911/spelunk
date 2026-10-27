@@ -1,6 +1,6 @@
 {
   "name": "spelunk-cli",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Understand any codebase: where code lives, how it's written, and how the pieces connect. CLI and MCP server.",
   "type": "module",
   "bin": {

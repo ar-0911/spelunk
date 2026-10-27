@@ -80,7 +80,7 @@ describe("MCP server", async () => {
 
   it("lists its tools", async () => {
     const { tools } = await client.listTools();
-    expect(tools.map((t) => t.name).sort()).toEqual(["dependencies", "dependents", "env_vars", "file", "impact", "lookup_error", "module", "onboarding_tour", "overview", "rescan", "risks", "routes", "symbols", "trace", "where"]);
+    expect(tools.map((t) => t.name).sort()).toEqual(["agents", "dependencies", "dependents", "env_vars", "file", "impact", "lookup_error", "module", "onboarding_tour", "overview", "rescan", "risks", "routes", "symbols", "trace", "where"]);
   });
 
   it("answers with path:line locations", async () => {

@@ -67,6 +67,11 @@ export function parseDiff(diff: string): Omit<ChangedFile, "symbols" | "inIndex"
   return files.filter((f) => f.path);
 }
 
+/** Where `branch` split off `base`: comparing a working tree with it shows only the branch's own work. */
+export async function mergeBase(root: string, base: string, branch = "HEAD"): Promise<string | undefined> {
+  return run("git", ["-C", root, "merge-base", base, branch]).then((r) => r.stdout.trim() || undefined, () => undefined);
+}
+
 /** The base to compare with when none is given: the remote default branch, else main or master. */
 export async function defaultBase(root: string): Promise<string> {
   const git = (args: string[]) => run("git", ["-C", root, ...args]).then((r) => r.stdout.trim(), () => "");
@@ -76,10 +81,10 @@ export async function defaultBase(root: string): Promise<string> {
   return "HEAD~1";
 }
 
-export async function gitDiff(root: string, base: string, options: { includeWorkingTree?: boolean } = {}): Promise<string> {
-  if (base.startsWith("-")) throw new Error(`"${base}" isn't a branch or commit.`);
+export async function gitDiff(root: string, base: string, options: { includeWorkingTree?: boolean; head?: string } = {}): Promise<string> {
+  for (const ref of [base, options.head ?? ""]) if (ref.startsWith("-")) throw new Error(`"${ref}" isn't a branch or commit.`);
   // base...HEAD: only what this branch added since it split off, not what landed on base meanwhile.
-  const args = ["-C", root, "diff", "--unified=0", "--no-color", "--find-renames", options.includeWorkingTree ? base : `${base}...HEAD`, "--"];
+  const args = ["-C", root, "diff", "--unified=0", "--no-color", "--find-renames", options.includeWorkingTree ? base : `${base}...${options.head || "HEAD"}`, "--"];
   try {
     return (await run("git", args, { maxBuffer: 256 * 1024 * 1024 })).stdout;
   } catch (err) {
