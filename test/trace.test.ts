@@ -242,3 +242,115 @@ describe("pricing", () => {
     delete process.env.SPELUNK_PRICE_OUT;
   });
 });
+
+/** Express's own shapes (lib/application.js, lib/express.js, lib/response.js): methods assigned onto the exported object. */
+const EXPRESS_LIB = {
+  "package.json": JSON.stringify({ name: "express", main: "index.js" }),
+  "index.js": `module.exports = require('./lib/express');\n`,
+  "lib/express.js": `
+/*!
+ * express
+ * Copyright(c) 2009-2013 TJ Holowaychuk
+ * MIT Licensed
+ */
+
+'use strict';
+
+var proto = require('./application');
+
+exports = module.exports = createApplication;
+
+function createApplication() {
+  var app = function (req, res, next) { app.handle(req, res, next); };
+  app.init();
+  return app;
+}
+
+exports.application = proto;
+exports.query = function query(options) {
+  return options;
+};
+module.exports.json = (options) => options;
+`,
+  "lib/application.js": `
+/*!
+ * express
+ * Copyright(c) 2009-2013 TJ Holowaychuk
+ * MIT Licensed
+ */
+
+'use strict';
+
+var compileETag = require('./utils').compileETag;
+
+var app = exports = module.exports = {};
+
+/**
+ * Initialize the server.
+ */
+app.init = function init() {
+  this.set('etag', 'weak');
+};
+
+app.set = function set(setting, val) {
+  return compileETag(val);
+};
+
+app.handle = function handle(req, res, callback) {
+  this.init();
+  JSON.stringify(req);
+};
+
+app.use = function use(fn) {
+  return this.handle(fn);
+};
+
+function logerror(err) {
+  console.error(err);
+}
+`,
+  "lib/utils.js": `exports.compileETag = function (val) {\n  return val;\n};\n`,
+  "lib/response.js": `
+var res = Object.create(null);
+module.exports = res;
+
+res.status = function status(code) {
+  this.statusCode = code;
+  return this;
+};
+
+res.json = function json(obj) {
+  return this.status(200);
+};
+`,
+};
+
+describe("Express-style code (methods assigned onto objects)", async () => {
+  const ix = await scan(await repo(EXPRESS_LIB));
+  const g = buildGraph(ix);
+  const file = (p: string) => ix.files.find((f) => f.path === p)!;
+  const syms = (p: string) => file(p).symbols.map((s) => `${s.parent ? `${s.parent}.` : ""}${s.name}${s.exported ? "*" : ""}`);
+
+  it("indexes `app.x = function`, `exports.x = function` and `module.exports.x = () =>`", () => {
+    expect(syms("lib/application.js")).toEqual(["app.init*", "app.set*", "app.handle*", "app.use*", "logerror"]);
+    expect(syms("lib/express.js")).toEqual(expect.arrayContaining(["createApplication*", "query*", "json*"]));
+    expect(syms("lib/utils.js")).toEqual(["compileETag*"]);
+    expect(syms("lib/response.js")).toEqual(["res.status*", "res.json*"]);
+    expect(file("lib/application.js").symbols[0]!.doc).toBe("Initialize the server.");
+  });
+
+  it("traces through `this` and a `require(...).name` binding", () => {
+    const [t] = resolveTarget(ix, "app.use");
+    expect(t?.path).toBe("lib/application.js");
+    const r = trace(ix, g, t!, { depth: 4 });
+    const flat = (n: { name: string; path: string; byName?: true; children: never[] }[]): string[] => n.flatMap((x) => [`${x.name}${x.byName ? "?" : ""}`, ...flat(x.children)]);
+    expect(flat(r.flow as never)).toEqual(["app.handle", "app.init", "app.set", "compileETag"]);
+    expect(r.calls.unresolved).not.toContain("JSON.stringify");
+    expect(resolveTarget(ix, "res.json").map((x) => x.path)).toEqual(["lib/response.js"]);
+  });
+
+  it("doesn't take a copyright banner for the file's description", () => {
+    expect(file("lib/application.js").doc).toBeUndefined();
+    expect(file("lib/express.js").doc).toBeUndefined();
+  });
+});

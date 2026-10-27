@@ -88,6 +88,9 @@ function nameOf(node: Node): string | undefined {
   return undefined;
 }
 
+/** A license or copyright banner ("/*! express, MIT Licensed"), which says nothing about what the file does. */
+const LICENSE = /^\/\*!|copyright|\(c\)\s*\d{4}|licensed under|spdx-license-identifier|@license|all rights reserved/i;
+
 function cleanComment(text: string): string {
   return text
     .replace(/^\/\*\*?|\*\/$/g, "")
@@ -252,6 +255,34 @@ export function extract(tree: Tree, lang: string): TreeFacts {
       }
     }
 
+    // `app.use = function use() {}`, `exports.x = () => {}`, `Foo.prototype.bar = function () {}`:
+    // how older Node code (Express, most of npm) defines its API.
+    if (node.type === "assignment_expression" && !insideFn && isJs) {
+      const left = node.childForFieldName("left");
+      const value = node.childForFieldName("right");
+      if (left?.type === "member_expression" && value && /^(arrow_function|function_expression|function|generator_function)$/.test(value.type)) {
+        const name = left.childForFieldName("property")?.text;
+        const obj = left.childForFieldName("object")?.text.replace(/\s+/g, "").replace(/\.prototype$/, "");
+        if (name && obj && /^[\w$.]+$/.test(obj)) {
+          const onModule = obj === "exports" || obj === "module.exports";
+          const stmt = node.parent?.type === "expression_statement" ? node.parent : node;
+          const sym: SymbolInfo = {
+            name,
+            kind: onModule ? "function" : "method",
+            line: stmt.startPosition.row + 1,
+            endLine: stmt.endPosition.row + 1,
+            exported: onModule,
+            ...(onModule ? {} : { parent: obj }),
+            signature: stmt.text.split("\n")[0]!.trim().slice(0, 160),
+          };
+          const doc = docAbove(stmt);
+          if (doc) sym.doc = doc;
+          symbols.push(sym);
+          nextInsideFn = true;
+        }
+      }
+    }
+
     // Imports
     switch (node.type) {
       case "import_statement":
@@ -390,7 +421,7 @@ export function extract(tree: Tree, lang: string): TreeFacts {
     const parts: string[] = [];
     for (const c of root.namedChildren) {
       if (!isComment(c)) break;
-      if (/^#!/.test(c.text)) continue;
+      if (/^#!/.test(c.text) || LICENSE.test(c.text)) continue;
       parts.push(cleanComment(c.text));
     }
     // A comment that is really a symbol's doc (directly above the first declaration) isn't a file header.
@@ -445,6 +476,11 @@ function jsBindings(node: Node): Partial<ImportRef> {
 
 /** `const x = require("…")` binds a namespace; `const { a, b: c } = require("…")` binds names. */
 function requireBindings(call: Node): Partial<ImportRef> {
+  // `var compileETag = require("./utils").compileETag` binds one name.
+  const member = call.parent?.type === "member_expression" && call.parent.childForFieldName("object")?.id === call.id ? call.parent : undefined;
+  const holder = member?.parent?.type === "variable_declarator" ? member.parent.childForFieldName("name") : undefined;
+  const prop = member?.childForFieldName("property")?.text;
+  if (member) return holder?.type === "identifier" && prop ? { names: [prop], bindings: [holder.text] } : {};
   const decl = call.parent?.type === "variable_declarator" ? call.parent : undefined;
   const target = decl?.childForFieldName("name");
   if (!target) return {};
@@ -472,8 +508,43 @@ function requireBindings(call: Node): Partial<ImportRef> {
  * Exports declared apart from the definition: `export { a, b as c }`,
  * `export default a`, and CommonJS `module.exports = { a }` / `exports.a = a`.
  */
+/** `a = b = module.exports = x` → the assigned names (["a", "b", "module.exports"]) and the final value. */
+function assignChain(node: Node): { lefts: string[]; value: Node | null } {
+  const lefts: string[] = [];
+  let cur: Node | null = node;
+  while (cur?.type === "assignment_expression") {
+    lefts.push(cur.childForFieldName("left")?.text.replace(/\s+/g, "") ?? "");
+    cur = cur.childForFieldName("right");
+  }
+  return { lefts, value: cur };
+}
+
 function markJsExports(root: Node, symbols: SymbolInfo[]): void {
   const top = new Map(symbols.filter((s) => !s.parent).map((s) => [s.name, s]));
+  // Objects that are the module's exports (`var app = exports = module.exports = {}`, `module.exports = req`): their methods are its API.
+  const moduleObjects = new Set<string>();
+  const isModule = (l: string) => l === "module.exports" || l === "exports";
+  for (const n of root.namedChildren) {
+    if (n?.type === "lexical_declaration" || n?.type === "variable_declaration") {
+      for (const d of n.namedChildren) {
+        const value = d?.childForFieldName("value");
+        if (value?.type === "assignment_expression" && assignChain(value).lefts.some(isModule)) moduleObjects.add(d!.childForFieldName("name")!.text);
+      }
+    }
+    const e = n?.type === "expression_statement" ? n.namedChildren[0] : null;
+    if (e?.type === "assignment_expression") {
+      const { lefts, value } = assignChain(e);
+      if (lefts.some(isModule)) {
+        for (const l of lefts) if (/^[\w$]+$/.test(l) && !isModule(l)) moduleObjects.add(l);
+        if (value?.type === "identifier") moduleObjects.add(value.text);
+      }
+    }
+  }
+  for (const s of symbols) {
+    if (s.parent && moduleObjects.has(s.parent)) s.exported = true;
+    // `exports = module.exports = createApplication`: the function is the module.
+    if (!s.parent && moduleObjects.has(s.name)) Object.assign(s, { exported: true, default: true });
+  }
   const mark = (name: string | undefined, asDefault = false) => {
     const s = name ? top.get(name) : undefined;
     if (!s) return;
