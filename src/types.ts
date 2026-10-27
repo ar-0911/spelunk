@@ -19,6 +19,8 @@ export interface SymbolInfo {
   calls?: string[];
   /** The module's default export (`export default`, `module.exports = x`). */
   default?: boolean;
+  /** A Moleculer action or event handler: reached by name through the broker (`ctx.call("users.get")`), with `parent` as the service. */
+  broker?: "action" | "event";
 }
 
 export interface ImportRef {
@@ -125,4 +127,4 @@ export interface Index {
   only?: string[];
 }
 
-export const INDEX_VERSION = 4;
+export const INDEX_VERSION = 5;

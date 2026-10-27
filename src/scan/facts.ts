@@ -10,6 +10,8 @@ export async function factsFor(path: string, source: string, hash: string): Prom
   const head = source.slice(0, 2000);
   const role = roleFor(path, def.id, head);
   const lineFacts = detectLines(path, def.id, source, def.lineComment);
+  // A test that builds a server or broker isn't where the program starts.
+  if (role === "test") delete lineFacts.entry;
   const base: FileFacts = {
     path,
     language: def.id,

@@ -68,14 +68,14 @@ Run these inside the repository you want to understand, or pass `-C <dir>`. `-C`
 | Command | What you get |
 |---|---|
 | `spelunk map` | The field guide, `.spelunk/map.html`: start here, how to run it, an architecture diagram, a code map of every module, search, routes, flows, debugging, config, risks and tests. `--format md` writes `SPELUNK.md` instead, with a Mermaid diagram GitHub renders. |
-| `spelunk where "<words>"` | Where a feature, error message, route, function or env var lives. Ranked, with `path:line`. "auth" also finds login, session and token code. |
+| `spelunk where "<words>"` | Where a feature, error message, route, function or env var lives. Ranked, with `path:line`. "auth" also finds login, session and token code. `--kind symbol` (or `file`, `route`, `env`) narrows it; the dashboard's Find has the same filter. |
 | `spelunk trace <target>` | For a route: the client code that calls it and the handler's call tree. For a function: what it calls and who uses it. For a file: imports, importers, and how entry points reach it. |
 | `spelunk file <path>` | Everything known about one file: symbols, routes, imports, importers, env vars, where it throws and logs. |
 | `spelunk module <dir>` | One module: files ranked by how much they're imported, dependencies, and Claude's summary. |
 | `spelunk routes [filter]` | Every HTTP route and the client calls that hit it. |
 | `spelunk risks [--kind k]` | Places bugs hide: swallowed errors, calls to routes that don't exist, import cycles, duplicated code, hotspots, long functions, untested modules, dead files, undocumented env vars, TODOs. |
 | `spelunk error "<text>"` | Paste an error message or stack trace (or pipe one in: `pbpaste \| spelunk error`). Maps frames to files and functions, even from absolute container paths or compiled `dist/` output, and finds the throw or log statement that produces the message. |
-| `spelunk impact [base]` | What the current branch changes compared with `base` (default: the remote's main branch): changed functions, files that depend on them, routes whose handlers reach the change, tests to run, changed files no test reaches, and risks in the changed lines. Markdown, so it fits a PR comment. `--working` includes uncommitted edits. |
+| `spelunk impact [base]` | What the current branch changes compared with `base` (default: the remote's main branch): changed functions, files that depend on them, routes whose handlers reach the change, tests to run, changed files no test reaches, and risks in the changed lines. Markdown, so it fits a PR comment. `--working` includes uncommitted edits; `--head <branch>` compares another branch, reading that branch's own code. On the dashboard's **Changes** page you pick both branches. |
 | `spelunk tour` | A first-day walkthrough: what it is, how to run it, the settings it needs, the big parts, one request end to end, the core files, where bugs hide, how to debug and test. |
 | `spelunk ask "<question>"` | Claude answers from the code: it searches, traces and reads line ranges through Spelunk's index (not the whole repo), and cites `path:line` for each claim. Needs `ANTHROPIC_API_KEY`; a question usually costs a few cents. |
 | `spelunk publish` | Publishes the map as one Elemnt page, creating it or updating it in place. See [Share the map in Elemnt](#share-the-map-in-elemnt). |
@@ -160,7 +160,9 @@ Symbols, imports and calls: TypeScript, JavaScript, Python, Go, Rust, Java, Kotl
 
 Imports resolve to files for TypeScript and JavaScript (including tsconfig paths and workspace packages), Python, Go (via go.mod), Rust, the JVM languages, Ruby, C and C++, and PHP (PSR-4).
 
-Routes: Express, Hono, Fastify, Koa and similar, `fetch` and axios clients, Flask, FastAPI (with `APIRouter` prefixes), Django, Go `net/http`, gin and chi, Spring, axum, actix, Rails, Sinatra, Laravel and ASP.NET.
+Routes: Express, Hono, Fastify, Koa and similar, `fetch` and axios clients, Flask, FastAPI (with `APIRouter` prefixes), Django, Go `net/http`, gin and chi, Spring, axum, actix, Rails, Sinatra, Laravel, ASP.NET and moleculer-web gateways (`aliases`, including `REST` shorthands, under the route's `path`).
+
+Moleculer: a service schema's actions, events and methods are symbols under the service name (`users.get`, `v2.users.get`). `ctx.call("users.get")`, `broker.call`, `ctx.emit` and `this.actions.x()` are followed to the action, an action's trace lists every place that calls it by name, and the services `moleculer-runner` loads count as entry points.
 
 Project files: package.json, pyproject.toml, requirements.txt, setup.py, go.mod, Cargo.toml, pom.xml, Gradle, Gemfile, Dockerfiles, compose files, CI workflows, Makefiles and `.env` examples.
 

@@ -126,6 +126,14 @@ dialog::backdrop { background: rgba(0,0,0,.35); }
 .tstep.done .tnum { background: var(--accent); border-color: var(--accent); color: var(--bg); }
 .tstep.done h3 { color: var(--muted); }
 .topen { display: grid; gap: 4px; }
+details.sec { border-top: 1px solid var(--line); padding: 10px 0; }
+details.sec > summary { cursor: pointer; font-weight: 600; font-size: 15px; list-style-position: outside; }
+details.sec > summary .muted { font-weight: 400; font-size: 13px; }
+details.sec[open] > summary { margin-bottom: 8px; }
+.cmp { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; }
+.cmp label { display: grid; gap: 3px; font-size: 12.5px; color: var(--muted); }
+.cmp .field { min-width: 200px; }
+.summary { font-size: 15px; margin: 16px 0 8px; }
 .tick { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--muted); margin-top: 10px; cursor: pointer; }
 .askbox { display: grid; gap: 8px; max-width: 760px; margin-top: 14px; }
 .askbox .field { max-width: none; resize: vertical; }
@@ -287,22 +295,29 @@ function vModule(path) {
 }
 
 // ---------- Find
-let findTimer;
+let findTimer, findKind = "";
+const FIND_KINDS = [["", "Everything"], ["symbol", "Functions & classes"], ["file", "Files"], ["route", "Routes"], ["env", "Settings"]];
 function vFind(q) {
   $("#main").innerHTML = '<div class="view"><h1>Find</h1><p class="lede">Type what you are looking for in plain words: a feature, an error message, a page, a setting.</p>' +
     '<div class="searchrow"><input class="field" id="q" type="search" placeholder="e.g. login, send email, payment failed, DATABASE_URL" autocomplete="off" aria-label="What are you looking for?"></div>' +
-    '<div class="chips">' + ["login", "database", "send email", "error handling", "config", "upload"].map((x) => '<button class="chip" data-q="' + x + '">' + x + "</button>").join("") + '</div><div id="hits"></div></div>';
+    '<div class="chips" role="group" aria-label="Show">' + FIND_KINDS.map(([k, label]) => '<button class="chip" data-findkind="' + k + '" aria-pressed="' + (k === findKind) + '">' + label + "</button>").join("") + "</div>" +
+    '<div class="chips"><span class="muted" style="font-size:12.5px;align-self:center">Try:</span>' + ["login", "database", "send email", "error handling", "config", "upload"].map((x) => '<button class="chip" data-q="' + x + '">' + x + "</button>").join("") + '</div><div id="hits"></div></div>';
   const input = $("#q");
   input.addEventListener("input", () => { clearTimeout(findTimer); findTimer = setTimeout(() => search(input.value), 200); });
+  document.querySelectorAll("[data-findkind]").forEach((b) => b.addEventListener("click", () => {
+    findKind = b.dataset.findkind;
+    document.querySelectorAll("[data-findkind]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    search(input.value);
+  }));
   if (q) { input.value = q; search(q); }
   input.focus();
 }
 async function search(q) {
   if (!q.trim()) { $("#hits").innerHTML = ""; return; }
-  const hits = await api("/api/where?q=" + encodeURIComponent(q));
+  const hits = await api("/api/where?q=" + encodeURIComponent(q) + (findKind ? "&kind=" + findKind : ""));
   if (q !== $("#q").value) return;
   $("#hits").innerHTML = hits.length ? hits.map((h) => '<div class="hit"><span class="tag">' + esc(h.kind) + "</span><div><div>" + (h.name ? "<b>" + esc(h.name) + "</b> " : "") + loc(h.path, h.line) +
-    (h.kind === "symbol" || h.kind === "route" ? ' · ' + traceBtn(h.kind === "route" ? h.name : h.name, "trace") : "") + '</div><div class="why">' + esc(h.why) + "</div></div></div>").join("") : '<p class="empty">Nothing matches. Try other words, or a name you saw on screen or in an error.</p>';
+    (h.kind === "symbol" || h.kind === "route" ? ' · ' + traceBtn(h.kind === "route" ? h.name : h.name, "trace") : "") + '</div><div class="why">' + esc(h.why) + "</div></div></div>").join("") : '<p class="empty">Nothing matches' + (findKind ? " in " + FIND_KINDS.find(([k]) => k === findKind)[1].toLowerCase() + '. <button class="lnk" data-findkind-all>Search everything</button>' : ". Try other words, or a name you saw on screen or in an error.") + "</p>";
 }
 
 // ---------- Trace
@@ -595,9 +610,22 @@ async function startBraid(body) {
 
 // ---------- Changes (impact)
 function vChanges() {
-  $("#main").innerHTML = '<div class="view"><h1>Changes</h1><p class="lede">What the current branch touches compared with the main branch: the functions it edits, what depends on them, the pages and API calls to re-check, and the tests to run.</p>' +
-    '<form id="cf" class="searchrow"><input class="field" id="cb" placeholder="Compare with (default: the main branch)" aria-label="Branch or commit to compare with" style="max-width:360px"><label class="tick" style="margin:0"><input type="checkbox" id="cw"> Include uncommitted edits</label><select class="field" id="ca" aria-label="Whose changes" style="max-width:220px;display:none"><option value="">This branch</option></select><button class="btn primary">Show changes</button></form><div id="cr"></div></div>';
+  $("#main").innerHTML = '<div class="view"><h1>Changes</h1><p class="lede">Pick a branch and what to compare it with. Spelunk shows the functions it changes, the routes and tests to re-check, and what else depends on it.</p>' +
+    '<form id="cf" class="cmp"><label>Changes in<input class="field" id="ch" list="brs" autocomplete="off" placeholder="this branch" aria-label="Branch with the changes"></label>' +
+    '<label>compared with<input class="field" id="cb" list="brs" autocomplete="off" placeholder="the main branch" aria-label="Branch or commit to compare with"></label>' +
+    '<select class="field" id="ca" aria-label="Whose changes" style="max-width:220px;display:none"><option value="">This branch</option></select>' +
+    '<button class="btn primary">Compare</button></form><datalist id="brs"></datalist>' +
+    '<label class="tick" id="cwl"><input type="checkbox" id="cw"> Include edits I haven\'t committed yet</label><div id="cr"></div></div>';
   $("#cf").addEventListener("submit", (e) => { e.preventDefault(); runChanges(); });
+  // Uncommitted edits only exist on the branch that's checked out.
+  const syncTick = () => { $("#cwl").style.display = !$("#ch").value || $("#ch").value === branchInfo.current ? "" : "none"; };
+  $("#ch").addEventListener("input", syncTick);
+  api("/api/branches").then((b) => {
+    branchInfo = b;
+    $("#brs").innerHTML = b.branches.map((x) => '<option value="' + esc(x) + '">').join("");
+    $("#ch").placeholder = b.current + " (checked out)";
+    $("#cb").placeholder = b.base;
+  }).catch(() => {});
   if (state.braid && state.braid.here) api("/api/agents").then((m) => {
     if (!m.here || !m.agents.some((a) => a.live)) return;
     $("#ca").innerHTML = '<option value="">This branch</option>' + m.agents.filter((a) => a.live).map((a) => '<option value="' + esc(a.name) + '"' + (a.name === (agentPick || agentShown) ? " selected" : "") + ">Agent " + esc(a.name) + "</option>").join("");
@@ -605,24 +633,35 @@ function vChanges() {
   }).catch(() => {});
   runChanges();
 }
+let branchInfo = { current: "", branches: [], base: "" };
+const plural = (n, one, many) => fmt(n) + " " + (n === 1 ? one : many || one + "s");
+const section = (title, count, body, open) => '<details class="sec"' + (open ? " open" : "") + "><summary>" + title + (count !== undefined ? ' <span class="muted">' + fmt(count) + "</span>" : "") + "</summary>" + body + "</details>";
 async function runChanges() {
-  $("#cr").innerHTML = '<p class="muted"><span class="spinner"></span> Comparing…</p>';
+  $("#cr").innerHTML = '<p class="muted"><span class="spinner"></span> Comparing… Another branch takes a little longer the first time, while Spelunk reads its code.</p>';
   try {
     const who = agentPick || ($("#ca") && $("#ca").value) || "";
     agentPick = "";
     agentShown = who;
-    const i = await api(who ? "/api/impact?agent=" + encodeURIComponent(who) : "/api/impact?base=" + encodeURIComponent($("#cb").value) + ($("#cw").checked ? "&working=1" : ""));
-    if (!$("#cb").value) $("#cb").placeholder = "Compare with: " + i.base;
+    const head = $("#ch").value.trim();
+    const working = $("#cw").checked && (!head || head === branchInfo.current);
+    const i = await api(who ? "/api/impact?agent=" + encodeURIComponent(who) : "/api/impact?base=" + encodeURIComponent($("#cb").value) + (head ? "&head=" + encodeURIComponent(head) : "") + (working ? "&working=1" : ""));
     if (!i.files.length) { $("#cr").innerHTML = '<p class="empty">No changes between ' + esc(i.head) + " and " + esc(i.base) + ".</p>"; return; }
-    let h = (i.agent ? '<p class="muted" style="margin:0 0 10px">Agent <b>' + esc(i.agent) + "</b>'s work against " + esc(i.base) + ", uncommitted edits included.</p>" : "") + '<div class="stats"><span><b>' + i.files.length + "</b> files changed</span><span><b>" + i.dependents.length + "</b> depend on them</span><span><b>" + i.routes.length + "</b> routes to re-check</span><span><b>" + i.tests.length + "</b> tests to run</span></div>";
-    if (i.untested.length) h += '<div class="note err">No test reaches ' + i.untested.slice(0, 8).map((p) => loc(p)).join(", ") + (i.untested.length > 8 ? " and " + (i.untested.length - 8) + " more" : "") + ". Check these by hand.</div>";
-    h += '<h2>Changed</h2><div class="tw"><table><tr><th>File</th><th>Change</th><th>Functions touched</th></tr>' + i.files.slice(0, 200).map((f) => "<tr><td>" + (f.inIndex ? loc(f.path) : '<span class="mono" style="font-size:12.5px">' + esc(f.path) + "</span>") + '</td><td><span class="tag">' + f.status + "</span></td><td>" + f.symbols.slice(0, 10).map((s) => loc(f.path, s.line, (s.parent ? s.parent + "." : "") + s.name)).join(", ") + (f.symbols.length > 10 ? " …" : "") + "</td></tr>").join("") + "</table></div>";
-    if (i.routes.length) h += '<h2>Routes to re-check</h2><div class="tw"><table>' + i.routes.map((r) => '<tr><td><span class="tag">' + esc(r.method) + '</span></td><td class="mono" style="font-size:12.5px">' + esc(r.path) + "</td><td>" + loc(r.file, r.line) + '</td><td class="muted">' + esc(r.reason) + "</td></tr>").join("") + "</table></div>";
-    if (i.tests.length) h += "<h2>Tests to run</h2>" + i.tests.slice(0, 60).map((t) => "<div>" + loc(t.path) + ' <span class="muted" style="font-size:13px">' + esc(t.reason) + "</span></div>").join("");
-    if (i.modules.length) h += '<h2>Parts affected</h2><div class="tw"><table><tr><th>Part</th><th>Files changed</th><th>Files depending</th></tr>' + i.modules.map((m) => '<tr><td><button class="lnk" data-module="' + esc(m.path) + '">' + esc(m.path || "(root)") + "</button></td><td>" + m.changed + "</td><td>" + m.affected + "</td></tr>").join("") + "</table></div>";
-    if (i.dependents.length) h += "<h2>Depends on the change</h2>" + i.dependents.filter((d) => d.depth === 1).slice(0, 40).map((d) => "<div>" + loc(d.path) + ' <span class="muted" style="font-size:13px">imports ' + esc(d.via) + "</span></div>").join("") + (i.dependents.some((d) => d.depth > 1) ? '<p class="muted" style="font-size:13px">And ' + i.dependents.filter((d) => d.depth > 1).length + " more through those.</p>" : "");
-    if (i.env.length) h += "<h2>Settings read in the changed lines</h2>" + i.env.map((e) => "<div><code>" + esc(e.name) + "</code> " + loc(e.path, e.line) + "</div>").join("");
-    if (i.risks.length) h += "<h2>Risks in the changed lines</h2>" + i.risks.slice(0, 30).map((x) => '<div class="risk sev-' + x.severity + '"><span class="pill ' + x.severity + '">' + x.severity + "</span> " + esc(x.title) + "<div>" + x.locations.slice(0, 3).map((l) => loc(l.path, l.line)).join(" · ") + "</div></div>").join("");
+    const code = i.files.filter((f) => f.symbols.length);
+    const fns = code.reduce((n, f) => n + f.symbols.length, 0);
+    // One sentence first: the size of the change and what to re-check. The detail sits in sections below.
+    let h = '<p class="summary">' + (i.agent ? "Agent <b>" + esc(i.agent) + "</b>" : "<b>" + esc(i.head) + "</b>") + " changes " + plural(i.files.length, "file") + " compared with <b>" + esc(i.base) + "</b>" +
+      (fns ? ", touching " + plural(fns, "function") + " in " + plural(code.length, "file") : "") + ". " +
+      (i.routes.length || i.tests.length ? "Re-check " + [i.routes.length ? plural(i.routes.length, "route") : "", i.tests.length ? "run " + plural(i.tests.length, "test file") : ""].filter(Boolean).join(" and ") + "." : "No routes or tests reach it.") + "</p>";
+    if (i.untested.length) h += '<div class="note err">No test reaches ' + i.untested.slice(0, 6).map((p) => loc(p)).join(", ") + (i.untested.length > 6 ? " and " + (i.untested.length - 6) + " more" : "") + ". Check these by hand.</div>";
+    const other = i.files.length - code.length;
+    h += section("Functions changed", fns, code.length ? code.slice(0, 100).map((f) => '<div style="margin-bottom:6px">' + loc(f.path) + ' <span class="tag">' + f.status + '</span><div style="font-size:13px;padding-left:12px">' + f.symbols.slice(0, 12).map((s) => loc(f.path, s.line, (s.parent ? s.parent + "." : "") + s.name)).join(", ") + (f.symbols.length > 12 ? " …" : "") + "</div></div>").join("") + (code.length > 100 ? '<p class="muted">And ' + (code.length - 100) + " more files.</p>" : "") : '<p class="muted">None: the changes are outside functions.</p>', code.length <= 15);
+    if (i.routes.length) h += section("Routes to re-check", i.routes.length, '<div class="tw"><table>' + i.routes.map((r) => '<tr><td><span class="tag">' + esc(r.method) + '</span></td><td class="mono" style="font-size:12.5px">' + traceBtn(r.method + " " + r.path, r.path) + "</td><td>" + loc(r.file, r.line) + '</td><td class="muted">' + esc(r.reason) + "</td></tr>").join("") + "</table></div>", i.routes.length <= 20);
+    if (i.tests.length) h += section("Tests to run", i.tests.length, i.tests.slice(0, 60).map((t) => "<div>" + loc(t.path) + ' <span class="muted" style="font-size:13px">' + esc(t.reason) + "</span></div>").join(""));
+    if (other) h += section("Other files changed", other, i.files.filter((f) => !f.symbols.length).slice(0, 200).map((f) => "<div>" + (f.inIndex ? loc(f.path) : '<span class="mono" style="font-size:12.5px">' + esc(f.path) + "</span>") + ' <span class="tag">' + f.status + "</span></div>").join(""));
+    if (i.dependents.length) h += section("Code that depends on the change", i.dependents.length, i.dependents.filter((d) => d.depth === 1).slice(0, 40).map((d) => "<div>" + loc(d.path) + ' <span class="muted" style="font-size:13px">imports ' + esc(d.via) + "</span></div>").join("") + (i.dependents.some((d) => d.depth > 1) ? '<p class="muted" style="font-size:13px">And ' + i.dependents.filter((d) => d.depth > 1).length + " more through those.</p>" : ""));
+    if (i.modules.length) h += section("Parts of the project affected", i.modules.length, '<div class="tw"><table><tr><th>Part</th><th>Files changed</th><th>Files depending</th></tr>' + i.modules.map((m) => '<tr><td><button class="lnk" data-module="' + esc(m.path) + '">' + esc(m.path || "(root)") + "</button></td><td>" + m.changed + "</td><td>" + m.affected + "</td></tr>").join("") + "</table></div>");
+    if (i.env.length) h += section("Settings read in the changed lines", i.env.length, i.env.map((e) => "<div><code>" + esc(e.name) + "</code> " + loc(e.path, e.line) + "</div>").join(""));
+    if (i.risks.length) h += section("Risks in the changed lines", i.risks.length, i.risks.slice(0, 30).map((x) => '<div class="risk sev-' + x.severity + '"><span class="pill ' + x.severity + '">' + x.severity + "</span> " + esc(x.title) + "<div>" + x.locations.slice(0, 3).map((l) => loc(l.path, l.line)).join(" · ") + "</div></div>").join(""));
     $("#cr").innerHTML = h;
   } catch (e) { $("#cr").innerHTML = '<div class="note err">' + esc(e.message) + "</div>"; }
 }
@@ -725,6 +764,7 @@ document.addEventListener("click", async (e) => {
     if (d.trace !== undefined) { closeFile(); view = "trace"; renderNav(); return vTrace(d.trace); }
     if (d.find !== undefined) { view = "find"; renderNav(); return vFind(d.find); }
     if (d.q !== undefined) { $("#q").value = d.q; return search(d.q); }
+    if (d.findkindAll !== undefined) return document.querySelector('[data-findkind=""]').click();
     if (d.ask !== undefined) { $("#askq").value = d.ask; return startAsk(d.ask); }
     if (t.id === "clonego") return useLink();
     if (d.view) return go(d.view);

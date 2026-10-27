@@ -58,6 +58,14 @@ function lastSegment(text: string): string | undefined {
  * receiver is what lets tracing tell a module or class call from a method on
  * some local object; "?" means the receiver isn't a plain name (a chained call).
  */
+/** The key of an object property or method: `create`, `"user.created"`, `'GET /x'`. */
+function propName(node: Node): string | undefined {
+  const key = node.childForFieldName("key") ?? node.childForFieldName("name");
+  if (!key) return undefined;
+  if (key.type === "string") return stringValue(key);
+  return /^(property_identifier|identifier|number)$/.test(key.type) ? key.text : undefined;
+}
+
 export function callRef(text: string): string | undefined {
   const segs = text.replace(/\s+/g, "").replace(/<[^<>]*>/g, "").split(/\?\.|::|->|[.!]/).filter(Boolean);
   const name = segs.pop();
@@ -207,7 +215,53 @@ export function extract(tree: Tree, lang: string): TreeFacts {
   };
 
   /** depth counts declaration nesting; insideFn stops closures from becoming symbols. */
+  /**
+   * A Moleculer service schema (`{ name: "users", actions: { … }, events, methods }`), in
+   * `module.exports`, a factory's return value or `this.parseServiceSchema(…)`. Its actions,
+   * events and methods become symbols under the service name; everything inside them is a body.
+   */
+  const service = (node: Node, depth: number): boolean => {
+    const pairs = node.namedChildren.filter((c): c is Node => c?.type === "pair");
+    const value = (key: string) => pairs.find((p) => propName(p) === key)?.childForFieldName("value") ?? null;
+    const name = stringValue(value("name"));
+    const sections = ["actions", "events", "methods"].filter((k) => value(k)?.type === "object");
+    if (!name || !sections.length) return false;
+    const version = value("version");
+    const svc = version ? `${version.type === "number" ? `v${version.text}` : stringValue(version) ?? version.text}.${name}` : name;
+    for (const child of node.namedChildren) {
+      if (!child) continue;
+      const section = child.type === "pair" ? propName(child) : undefined;
+      if (!section || !sections.includes(section)) {
+        walk(child, undefined, depth, false);
+        continue;
+      }
+      for (const prop of child.childForFieldName("value")!.namedChildren) {
+        const pname = prop && /^(pair|method_definition)$/.test(prop.type) ? propName(prop) : undefined;
+        if (!prop || !pname) {
+          if (prop) walk(prop, svc, depth + 1, true);
+          continue;
+        }
+        const sym: SymbolInfo = {
+          name: pname,
+          kind: "method",
+          line: prop.startPosition.row + 1,
+          endLine: prop.endPosition.row + 1,
+          exported: section === "actions",
+          parent: svc,
+          signature: prop.text.split("\n")[0]!.trim().slice(0, 160),
+          ...(section === "methods" ? {} : { broker: section === "actions" ? ("action" as const) : ("event" as const) }),
+        };
+        const doc = docAbove(prop);
+        if (doc) sym.doc = doc;
+        symbols.push(sym);
+        walk(prop, svc, depth + 1, true);
+      }
+    }
+    return true;
+  };
+
   const walk = (node: Node, parent: string | undefined, depth: number, insideFn: boolean) => {
+    if (isJs && node.type === "object" && service(node, depth)) return;
     if (node.type === "ERROR" || node.isMissing) parseErrors++;
     let nextParent = parent;
     let nextInsideFn = insideFn;
@@ -343,13 +397,18 @@ export function extract(tree: Tree, lang: string): TreeFacts {
       // Receivers live in their own field in Java (`object`), Ruby (`receiver`) and PHP (`object`, `scope`).
       const recv = node.type === "method_invocation" || node.type === "member_call_expression" ? node.childForFieldName("object") : lang === "ruby" ? node.childForFieldName("receiver") : node.type === "scoped_call_expression" ? node.childForFieldName("scope") : null;
       let ref = fn ? callRef(recv ? `${recv.text}.${fn.text}` : fn.text) : undefined;
+      // Moleculer: `this.actions.find()` is the service's own action.
+      if (isJs && fn && /^this\.actions\.[\w$]+$/.test(fn.text)) ref = `this.${fn.text.slice(13)}`;
       // Ruby `Foo.new` builds a Foo.
       if (lang === "ruby" && ref && /^[A-Z]\w*\.new$/.test(ref)) ref = ref.slice(0, -4);
       const callee = ref ? refName(ref) : undefined;
-      addCall(ref, node);
       const args = node.childForFieldName("arguments");
       const argList = args?.namedChildren.filter((a): a is Node => Boolean(a)) ?? [];
       const firstArg = argList[0] ?? null;
+      // Moleculer: `ctx.call("users.get")` and `broker.call(...)` reach an action by name; `emit`/`broadcast` an event.
+      const viaBroker = isJs && fn && /(^|\.)(ctx|broker)\.(call|mcall|emit|broadcast|broadcastLocal)$/.test(fn.text.replace(/\s+/g, "")) ? stringValue(firstArg) : undefined;
+      if (viaBroker && /^[\w$-]+(\.[\w$-]+)+$/.test(viaBroker)) addCall(`${/call$/.test(fn!.text) ? "svc" : "evt"}:${viaBroker}`, node);
+      else addCall(ref, node);
       // Functions passed by name are used too: `router.get("/users", auth, getUser)`, `items.map(format)`.
       // On a route registration, `controller.getUser` counts as well.
       const route = /^["'`]\//.test(firstArg?.text ?? "");

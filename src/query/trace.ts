@@ -67,6 +67,9 @@ export function resolveTarget(index: Index, target: string): TraceTarget[] {
   const t = target.trim();
   if (/^([A-Z]+\s+)?\//.test(t)) {
     for (const r of findRoutes(index, t)) out.push({ kind: "route", label: `${r.method} ${r.path}`, path: r.file, line: r.line, route: r });
+    // "POST /api/articles" also matches "POST /api/articles/:slug/comments"; when the route exists as typed, that's the one.
+    const exact = out.filter((x) => x.label.toLowerCase() === t.toLowerCase().replace(/\s+/g, " "));
+    if (exact.length) return exact;
     if (out.length) return out;
   }
   const file = index.files.find((f) => f.path === t) ?? index.files.find((f) => f.path.endsWith(`/${t}`));
@@ -146,7 +149,40 @@ export interface Definition {
   byName?: true;
 }
 
+const brokerCache = new WeakMap<Index, Map<string, Definition[]>>();
+
+/** Moleculer actions by "svc:users.get" and event handlers by "evt:user.created", across the repo. */
+function brokerTargets(index: Index): Map<string, Definition[]> {
+  let m = brokerCache.get(index);
+  if (!m) {
+    m = new Map();
+    for (const f of index.files) {
+      for (const s of f.symbols) {
+        if (!s.broker) continue;
+        const key = s.broker === "action" ? `svc:${s.parent}.${s.name}` : `evt:${s.name}`;
+        m.set(key, [...(m.get(key) ?? []), { path: f.path, symbol: s }]);
+      }
+    }
+    brokerCache.set(index, m);
+  }
+  return m;
+}
+
+/** The broker ref ("svc:users.get") a Moleculer action is called by, if it is one. */
+export const brokerRef = (s: SymbolInfo) => (s.broker === "action" ? `svc:${s.parent}.${s.name}` : s.broker === "event" ? `evt:${s.name}` : undefined);
+
 export function definition(index: Index, g: Graph, from: string, ref: string): Definition | undefined {
+  // Moleculer: the broker routes "users.get" to the users service's get action, wherever it lives.
+  // An event can have many handlers; the first is shown, marked as a name match.
+  if (ref.startsWith("svc:") || ref.startsWith("evt:")) {
+    const hits = brokerTargets(index).get(ref);
+    if (!hits?.length) return undefined;
+    if (ref.startsWith("evt:")) return { ...hits[0]!, byName: true };
+    if (hits.length === 1) return hits[0];
+    // The same service name in several places (examples, tests, a benchmark): the one in this file or folder is the one this code runs with.
+    const near = hits.find((h) => h.path === from) ?? hits.find((h) => posix.dirname(h.path) === posix.dirname(from));
+    return near ?? { ...hits[0]!, byName: true };
+  }
   const here = g.files.get(from) ?? index.files.find((f) => f.path === from);
   if (!here) return undefined;
   const dot = ref.lastIndexOf(".");
@@ -238,6 +274,7 @@ function callTree(index: Index, g: Graph, from: string, refs: string[], depth: n
     if (!def) {
       if (libraryCall(index, g, from, ref)) stats.library++;
       // Identifiers passed as arguments are recorded too; most are plain values, not calls, so they aren't counted.
+      else if (/^(svc|evt):/.test(ref)) stats.unresolved.push(`"${ref.slice(4)}"`); // a broker call to an action defined elsewhere (a mixin, another repo)
       else if (!/^[a-z_$][\w$]*$/i.test(ref) || /^[A-Z]/.test(ref)) stats.unresolved.push(ref.replace(/^\?\./, "….")); // "?" is a receiver that is itself an expression
       continue;
     }
@@ -275,7 +312,7 @@ function routeCalls(index: Index, r: RouteAt): string[] {
     out = refs(r.line, Math.min(later.length ? Math.min(...later) - 1 : Infinity, enclosing?.endLine ?? Infinity, r.line + 30));
   }
   // The handler the route detector named (`app.get("/x", getUser)`), in case its line wasn't a parsed call.
-  if (r.handler) out.unshift(r.handler.split(".").slice(-2).join("."));
+  if (r.handler) out.unshift(/^(svc|evt):/.test(r.handler) ? r.handler : r.handler.split(".").slice(-2).join("."));
   return [...new Set(out)];
 }
 
@@ -289,7 +326,12 @@ export function trace(index: Index, g: Graph, t: TraceTarget, options: { depth?:
       if (routesFor([t.route], c.method, c.path).length) callers.push({ path: c.file, line: c.line, label: `${c.method} ${c.path}` });
     }
   }
-  if (t.symbol) {
+  const viaBroker = t.symbol && brokerRef(t.symbol);
+  if (viaBroker) {
+    // Called by name through the broker: every `ctx.call("users.get")`, with its line.
+    for (const f of index.files) for (const [ref, line] of f.callSites) if (ref === viaBroker) usedBy.push({ path: f.path, line });
+    for (const r of allRoutes(index, "server")) if (r.handler === viaBroker) usedBy.push({ path: r.file, line: r.line });
+  } else if (t.symbol) {
     const name = t.symbol.name;
     for (const f of index.files) {
       if (f.path === t.path || !f.calls.includes(name)) continue;
