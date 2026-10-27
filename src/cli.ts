@@ -11,6 +11,7 @@ import { formatFile, formatHits, formatModule, formatOverview, formatRisks, form
 import { formatErrorLookup, lookupError } from "./query/errors.js";
 import { agentsOnMap, braidState, errorTask, formatAgents, riskTask, startBraid } from "./integrations/braid.js";
 import { parseFiles } from "./integrations/facts.js";
+import { outlineFiles } from "./integrations/outline.js";
 import { defaultBase, formatImpact, gitDiff, impact, mergeBase } from "./query/impact.js";
 import { resolveTarget, trace } from "./query/trace.js";
 import { where } from "./query/where.js";
@@ -49,6 +50,7 @@ Commands
   ui                   Open the dashboard in your browser: everything above, no commands needed
   mcp                  Run as an MCP server on stdio, for Claude Code and other agents
   facts                For other tools: parse files sent as JSON on stdin, print symbols and calls
+  outline              For other tools: split files sent as JSON on stdin into entities and class members
 
 Options
   -C, --cwd <dir|url>  Repository to read: a folder, or a GitHub/GitLab/Bitbucket link to clone
@@ -268,6 +270,12 @@ async function main(argv: string[]): Promise<number> {
       const input = process.stdin.isTTY ? "" : await readStdin();
       if (!input.trim()) return fail('Pipe JSON in: {"files": [{"path": "a.py", "text": "def f(): ..."}]}');
       return print(JSON.stringify(await parseFiles(JSON.parse(input))));
+    }
+    case "outline": {
+      // Stateless, like facts. Braid's merge driver uses it to merge class by class and method by method.
+      const input = process.stdin.isTTY ? "" : await readStdin();
+      if (!input.trim()) return fail('Pipe JSON in: {"files": [{"path": "a.ts", "text": "class A {}"}]}');
+      return print(JSON.stringify(await outlineFiles(JSON.parse(input))));
     }
     case "tour": {
       const ws = await open();

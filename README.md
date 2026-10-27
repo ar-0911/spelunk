@@ -85,7 +85,7 @@ Run these inside the repository you want to understand, or pass `-C <dir>`. `-C`
 | `spelunk ui` | The dashboard, above. `--port` to pick a port, `--no-open` to just print the link. |
 | `spelunk scan` | Re-index. Every command already rescans incrementally (only changed files are re-parsed), so you rarely need this. |
 
-`where`, `trace`, `risks`, `error`, `impact`, `tour`, `ask`, `overview` and `agents` take `--json`. `impact --head <commit>` compares a commit other than `HEAD`. `spelunk facts` parses files sent as JSON on stdin, for other tools.
+`where`, `trace`, `risks`, `error`, `impact`, `tour`, `ask`, `overview` and `agents` take `--json`. `impact --head <commit>` compares a commit other than `HEAD`. `spelunk facts` parses files sent as JSON on stdin, for other tools. `spelunk outline` splits files sent the same way into entities and class members with line ranges; Braid's merge driver uses it to merge classes method by method.
 
 ## Open a repository by link
 
@@ -139,7 +139,7 @@ For other MCP clients, run `spelunk mcp -C /path/to/repo` as a stdio server.
 - **Fix with Braid.** `spelunk risks --kind swallowed-error --braid` starts one agent per kind of finding; `spelunk error "..." --braid` starts one to fix the bug behind an error. On the dashboard: the **Fix with Braid** buttons on **Risks** and **Error lookup**, and a goal box on **Agents** that runs `braid do`. Spelunk asks before starting anything.
 - **An `agents` MCP tool**, so an agent can see who else is in the module it is about to edit.
 
-Braid uses Spelunk in turn, when it finds it: for its planner, as MCP tools for every agent, for conflict checks (`spelunk facts`) and for the impact section of its approval messages (`spelunk impact --head <commit> --json`). The two talk only through each other's command line, so each installs and runs on its own. `SPELUNK_BRAID` sets the command (for example `python -m braid`); `SPELUNK_BRAID=off` turns this off.
+Braid uses Spelunk in turn, when it finds it: for its planner, as MCP tools for every agent, for conflict checks (`spelunk facts`), for its merge driver (`spelunk outline`) and for the impact section of its approval messages (`spelunk impact --head <commit> --json`). The two talk only through each other's command line, so each installs and runs on its own. `SPELUNK_BRAID` sets the command (for example `python -m braid`); `SPELUNK_BRAID=off` turns this off.
 
 ## Claude explanations
 
