@@ -24,7 +24,10 @@ export function moduleLayers(mods: Report["modules"]): string[][] {
   for (const m of mods) depthOf(m.path);
   const rows: string[][] = [];
   for (const [p, d] of depth) (rows[d] ??= []).push(p);
-  return rows.map((r) => (r ?? []).sort()).reverse();
+  // A cycle broken partway can leave a depth with no module; map() would keep that hole and the drawing would crash on it.
+  return Array.from(rows, (r) => (r ?? []).sort())
+    .filter((r) => r.length)
+    .reverse();
 }
 
 const short = (p: string) => (p ? (p.length > 30 ? `…${p.slice(-29)}` : p) : "(root)");

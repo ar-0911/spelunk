@@ -1,0 +1,36 @@
+// Spelunk on Cloudflare: a Worker in front of one Container running
+// `spelunk serve` (the Dockerfile at the repository root).
+//
+// With no routes it is served at https://spelunk.<your-subdomain>.workers.dev.
+// To use your own hostname, uncomment "routes" (the zone must be on Cloudflare).
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "spelunk",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-10-01",
+  "workers_dev": true,
+  "observability": { "enabled": true },
+  // "routes": [{ "pattern": "spelunk.example.com", "custom_domain": true }],
+  "vars": {
+    // Code hosts visitors may download from, comma-separated.
+    "SPELUNK_ALLOWED_HOSTS": "github.com,gitlab.com,bitbucket.org",
+    // Downloaded repositories kept on the container's disk; the least recently opened go first.
+    "SPELUNK_MAX_REPOS": "30",
+    // Downloads one visitor address may start in an hour.
+    "SPELUNK_CLONES_PER_HOUR": "20"
+  },
+  "containers": [
+    {
+      "class_name": "Spelunk",
+      "image": "../../Dockerfile",
+      "image_build_context": "../..",
+      "instance_type": "standard-1",
+      // One instance: sessions and the shared scans live in its memory.
+      "max_instances": 1
+    }
+  ],
+  "durable_objects": {
+    "bindings": [{ "name": "SPELUNK", "class_name": "Spelunk" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Spelunk"] }]
+}
