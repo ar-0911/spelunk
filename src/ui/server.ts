@@ -21,6 +21,8 @@ import { buildReport, type Report } from "../report/model.js";
 import { buildTour } from "../report/tour.js";
 import { cloneRepo, parseRepoUrl, repoDir, reposDir } from "../scan/clone.js";
 import { openWorkspace, type Workspace } from "../workspace.js";
+import { handleMcpHttp, repoLink } from "../mcp-http.js";
+import { reportFor, type RepoHandle } from "../mcp.js";
 import { dashboardHtml } from "./page.js";
 
 /**
@@ -65,6 +67,14 @@ export interface HostedOptions {
   refetchAfterMs?: number;
   /** Downloads and scans running at once; the rest wait their turn. Default 2. */
   concurrentScans?: number;
+  /**
+   * New downloads the /mcp endpoint may start in an hour, for everyone together. Calls
+   * from claude.ai all come from Anthropic's addresses, so a per-address limit doesn't
+   * fit; repositories already downloaded don't count. Default 60.
+   */
+  mcpDownloadsPerHour?: number;
+  /** How long an /mcp tool call waits for a download and scan before answering "still indexing". Default 45 seconds. */
+  mcpWaitMs?: number;
 }
 
 /** One person's dashboard: the open repository and their Claude jobs. Local mode has exactly one. */
@@ -88,6 +98,8 @@ interface SharedRepo {
   openedAt: number;
   ws?: Promise<Workspace> | undefined;
   fetching?: Promise<void> | undefined;
+  /** Last time an /mcp tool call read it; such repos stay downloaded and scanned for a while with no browser open. */
+  mcpAt?: number | undefined;
 }
 
 interface ExplainJob {
@@ -163,14 +175,7 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
     if (s.ws && !refresh) return s.ws;
     const root = s.root;
     if (hosted) {
-      // Everyone who opens the same repository shares one scan of it.
-      const shared = repos.get(root);
-      if (!shared) throw new HttpError(409, "Paste a repository link first.");
-      shared.ws ??= turn(() => openWorkspace(root, { refresh: true }));
-      shared.ws.catch(() => {
-        shared.ws = undefined;
-      });
-      const w = await shared.ws;
+      const w = await sharedScan(root);
       if (s.root === root) {
         s.ws = w;
         s.report = undefined;
@@ -187,6 +192,19 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
         s.scanning = undefined;
       });
     return s.scanning;
+  };
+  /** Hosted mode: everyone who opens the same repository, in a browser or over MCP, shares one scan of it. */
+  const sharedScan = (root: string): Promise<Workspace> => {
+    const shared = repos.get(root);
+    if (!shared) throw new HttpError(409, "Paste a repository link first.");
+    if (!shared.ws) {
+      const ws = turn(() => openWorkspace(root, { refresh: true }));
+      shared.ws = ws;
+      ws.catch(() => {
+        if (shared.ws === ws) shared.ws = undefined;
+      });
+    }
+    return shared.ws;
   };
   const getReport = async (s: Session): Promise<Report> => {
     const w = await load(s, false);
@@ -229,11 +247,53 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
     const max = hosted?.maxRepos ?? 30;
     if (repos.size <= max) return;
     const open = new Set([...sessions.values()].map((x) => x.root));
-    const old = [...repos.entries()].filter(([dir, r]) => !open.has(dir) && !r.fetching).sort((a, b) => a[1].openedAt - b[1].openedAt);
+    const old = [...repos.entries()].filter(([dir, r]) => !open.has(dir) && !r.fetching && !mcpRecent(r)).sort((a, b) => a[1].openedAt - b[1].openedAt);
     for (const [dir] of old.slice(0, repos.size - max)) {
       repos.delete(dir);
       if (await within(reposDir(), dir)) await rm(dir, { recursive: true, force: true }).catch(() => undefined);
     }
+  };
+
+  const mcpRecent = (r: SharedRepo) => r.mcpAt !== undefined && Date.now() - r.mcpAt < 30 * 60_000;
+  let mcpDownloads: number[] = [];
+
+  /**
+   * Hosted mode's /mcp: the repository a tool call names, downloaded and scanned
+   * on first use and shared with the dashboard. A call that would wait longer than
+   * mcpWaitMs answers "still indexing" while the work goes on, so a client's
+   * request timeout doesn't throw the download away.
+   */
+  const mcpOpen = async (repo: string | undefined): Promise<RepoHandle | string> => {
+    if (!hosted) throw new Error("Remote MCP only runs in hosted mode.");
+    if (!repo?.trim()) return 'Name the repository: a public GitHub, GitLab or Bitbucket link, or "owner/name" for GitHub.';
+    const link = repoLink(repo);
+    const remote = parseRepoUrl(link);
+    if (!remote || remote.ssh) return `"${repo}" isn't a repository link. Use https://github.com/owner/name or owner/name.`;
+    if (!allowedCodeHosts.has(remote.host.toLowerCase())) return `This Spelunk only downloads from ${[...allowedCodeHosts].join(", ")}.`;
+    const dir = repoDir(remote);
+    const known = repos.get(dir);
+    const now = Date.now();
+    const needsDownload = !known || (!known.fetching && now - known.fetchedAt > (hosted.refetchAfterMs ?? 10 * 60_000));
+    if (needsDownload && !known?.fetchedAt) {
+      // Only first downloads count; refreshing a repository people are already using is cheap.
+      mcpDownloads = mcpDownloads.filter((t) => now - t < 60 * 60_000);
+      if (mcpDownloads.length >= (hosted.mcpDownloadsPerHour ?? 60)) return "This Spelunk has downloaded a lot of new repositories in the last hour. Try again later, or run it on your own computer: spelunk mcp";
+      mcpDownloads.push(now);
+    }
+    const ready = (async () => {
+      await hostedClone(link);
+      const shared = repos.get(dir);
+      if (shared) shared.mcpAt = Date.now();
+      return sharedScan(dir);
+    })();
+    const waited = await Promise.race([ready, new Promise<undefined>((ok) => setTimeout(ok, hosted.mcpWaitMs ?? 45_000))]).catch((err: unknown) => {
+      throw new Error(err instanceof Error ? err.message : String(err));
+    });
+    if (!waited) {
+      ready.catch(() => undefined);
+      return `Still downloading and indexing ${remote.host}/${remote.path}. Big repositories take a minute or two; call the tool again shortly.`;
+    }
+    return { root: dir, workspace: async () => waited, report: () => reportFor(waited) };
   };
 
   /** Forgets sessions nobody has used for a while, and the scans only they were holding. */
@@ -245,7 +305,7 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
     const max = hosted.maxSessions ?? 500;
     if (sessions.size > max) [...sessions.entries()].sort((a, b) => a[1].seen - b[1].seen).slice(0, sessions.size - max).forEach(([id]) => sessions.delete(id));
     const open = new Set([...sessions.values()].map((x) => x.root));
-    for (const [dir, r] of repos) if (!open.has(dir)) r.ws = undefined;
+    for (const [dir, r] of repos) if (!open.has(dir) && !mcpRecent(r)) r.ws = undefined;
     for (const [addr, times] of clonesByAddress) if (!times.some((t) => now - t < 60 * 60_000)) clonesByAddress.delete(addr);
   };
   const sweeper = hosted ? setInterval(sweep, 5 * 60_000) : undefined;
@@ -628,6 +688,13 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
     if (!hosted && !allowedHosts().has(req.headers.host ?? "")) throw new HttpError(403, "Wrong host.");
     const url = new URL(req.url ?? "/", "http://spelunk.local");
     if (hosted && req.method === "GET" && url.pathname === "/healthz") return send(res, 200, { ok: true });
+    // No OAuth here: MCP clients probe these before connecting, and a 401 (no cookie) would read as "sign-in needed".
+    if (hosted && url.pathname.startsWith("/.well-known/")) return send(res, 404, { error: "Not found." });
+    // Remote MCP has no cookie session: each tool call names a public repository, and nothing is kept per client.
+    if (hosted && url.pathname === "/mcp") {
+      const body: unknown = req.method === "POST" ? JSON.parse((await readBody(req, 256_000)) || "null") : undefined;
+      return handleMcpHttp(req, res, body, mcpOpen);
+    }
     const s = sessionFor(req, res, url);
     if (!s) return;
 
@@ -688,12 +755,12 @@ function send(res: ServerResponse, status: number, value: unknown): void {
   res.end(JSON.stringify(value));
 }
 
-async function readBody(req: IncomingMessage): Promise<string> {
+async function readBody(req: IncomingMessage, max = 64_000): Promise<string> {
   let size = 0;
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > 64_000) throw new HttpError(413, "Request too large.");
+    if (size > max) throw new HttpError(413, "Request too large.");
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
