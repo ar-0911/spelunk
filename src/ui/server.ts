@@ -17,7 +17,7 @@ import { frame, pickTarget } from "../query/walk.js";
 import { captionFrame } from "../explain/steps.js";
 import { where, type Hit } from "../query/where.js";
 import { diagramSvg } from "../report/diagram.js";
-import { areaOf, focus } from "../report/focus.js";
+import { areaOf, focus, serviceFocus, serviceMap } from "../report/focus.js";
 import { publishToElemnt, renderElemnt } from "../report/elemnt.js";
 import { renderHtml } from "../report/html.js";
 import { buildReport, type Report } from "../report/model.js";
@@ -349,7 +349,8 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
       const braid = s.root ? await braidState(s.root) : undefined;
       const areas = new Map<string, number>();
       for (const m of r.modules) areas.set(areaOf(m), (areas.get(areaOf(m)) ?? 0) + 1);
-      return { ...r, diagram: diagramSvg(r.modules, braid && agentMarks(agentsOnMap(braid, r))), areas: [...areas].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)) };
+      const services = serviceMap((await load(s, false)).index);
+      return { ...r, services: services ? services.mods.length : 0, diagram: diagramSvg(r.modules, braid && agentMarks(agentsOnMap(braid, r))), areas: [...areas].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)) };
     },
 
     "GET /api/agents": async (s) => {
@@ -434,6 +435,11 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
 
     // The map, filtered to some areas and without the smallest parts.
     "GET /api/diagram": async (s, q) => {
+      if (q.get("mode") === "services") {
+        const w = await load(s, false);
+        const map = serviceMap(w.index);
+        return { svg: map ? diagramSvg(map.mods) : "", shown: map?.mods.length ?? 0, total: map?.mods.length ?? 0 };
+      }
       const r = await getReport(s);
       const areas = (q.get("areas") ?? "").split(",").filter(Boolean);
       const small = Number(q.get("small")) || 0;
@@ -444,8 +450,7 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
 
     "GET /api/focus": async (s, q) => {
       const w = await load(s, false);
-      const r = await getReport(s);
-      const f = focus(r.modules, w.graph, q.get("module") ?? "");
+      const f = q.get("mode") === "services" ? serviceFocus(w.index, q.get("module") ?? "") : focus((await getReport(s)).modules, w.graph, q.get("module") ?? "");
       if (!f) throw new HttpError(404, "That part isn't on the map any more. Rescan and try again.");
       return f;
     },

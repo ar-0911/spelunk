@@ -204,6 +204,7 @@ label { font-size: 13px; color: var(--muted); }
 .drawer .dnav .btn { padding: 3px 10px; font-size: 12.5px; }
 .choices { display: grid; gap: 8px; max-width: 760px; }
 /* Map */
+.seg { display: inline-flex; gap: 0; } .seg .chip:first-child { border-radius: 999px 0 0 999px; } .seg .chip:last-child { border-radius: 0 999px 999px 0; margin-left: -1px; }
 .maptools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 10px; }
 #mapfig svg .sp-edge, #mapfig svg .sp-node { transition: opacity .12s; }
 #mapfig svg.hov .sp-edge:not(.on) { opacity: .12; }
@@ -361,22 +362,24 @@ function renderTop() {
 }
 
 // ---------- The map: filters, hover to light up links, click to focus one part
-let mapAreas = [], mapSmall = null;
+let mapAreas = [], mapSmall = null, mapMode = null;
 function mapToolbar() {
   const areas = report.areas || [];
   if (mapSmall === null) mapSmall = report.modules.length > 14;
-  return '<div class="maptools">' + (areas.length > 1 ? '<button class="chip" data-area="" aria-pressed="' + !mapAreas.length + '">Everything</button>' + areas.map((a) => '<button class="chip" data-area="' + esc(a.name) + '" aria-pressed="' + mapAreas.includes(a.name) + '">' + esc(a.name) + ' <span class="muted">' + a.count + "</span></button>").join("") : "") +
-    '<label class="tick" style="margin:0 0 0 auto"><input type="checkbox" id="mapsmall"' + (mapSmall ? " checked" : "") + "> Hide parts with fewer than 3 files</label></div>";
+  if (mapMode === null) mapMode = report.services ? "services" : "folders";
+  const modes = report.services ? '<span class="seg"><button class="chip" data-mapmode="services" aria-pressed="' + (mapMode === "services") + '" title="One box per service; arrows are ctx.call and events">Services (' + report.services + ')</button><button class="chip" data-mapmode="folders" aria-pressed="' + (mapMode === "folders") + '" title="One box per folder; arrows are imports">Folders</button></span>' : "";
+  return '<div class="maptools">' + modes + (mapMode === "services" ? '<span class="muted" style="font-size:12.5px">Arrows are broker calls (ctx.call) and events between services.</span>' : "") + (areas.length > 1 && mapMode === "folders" ? '<button class="chip" data-area="" aria-pressed="' + !mapAreas.length + '">Everything</button>' + areas.map((a) => '<button class="chip" data-area="' + esc(a.name) + '" aria-pressed="' + mapAreas.includes(a.name) + '">' + esc(a.name) + ' <span class="muted">' + a.count + "</span></button>").join("") : "") +
+    (mapMode === "folders" ? '<label class="tick" style="margin:0 0 0 auto"><input type="checkbox" id="mapsmall"' + (mapSmall ? " checked" : "") + "> Hide parts with fewer than 3 files</label>" : "") + "</div>";
 }
 async function redrawMap() {
   const fig = $("#mapfig"); if (!fig) return;
-  const r = await api("/api/diagram?areas=" + encodeURIComponent(mapAreas.join(",")) + "&small=" + (mapSmall ? 3 : 0));
+  const r = await api("/api/diagram?mode=" + mapMode + "&areas=" + encodeURIComponent(mapAreas.join(",")) + "&small=" + (mapSmall ? 3 : 0));
   fig.innerHTML = r.svg || '<p class="muted">No parts match.</p>';
   $("#mapcount").textContent = r.shown < r.total ? "Showing " + r.shown + " of " + r.total + " parts." : "";
 }
 function wireMap() {
   const fig = $("#mapfig"); if (!fig) return;
-  if (mapAreas.length || mapSmall) redrawMap();
+  if (mapAreas.length || mapSmall || mapMode === "services") redrawMap();
   fig.addEventListener("mouseover", (e) => {
     const n = e.target.closest(".sp-node"); const svg = fig.querySelector("svg"); if (!svg) return;
     if (!n) { svg.classList.remove("hov"); return; }
@@ -386,13 +389,13 @@ function wireMap() {
     svg.classList.add("hov");
   });
   fig.addEventListener("mouseleave", () => { const svg = fig.querySelector("svg"); if (svg) svg.classList.remove("hov"); });
-  $("#mapsmall").addEventListener("change", (e) => { mapSmall = e.target.checked; redrawMap(); });
+  const sm = $("#mapsmall"); if (sm) sm.addEventListener("change", (e) => { mapSmall = e.target.checked; redrawMap(); });
 }
 let focusLink = null;
 async function vFocus(path) {
   view = "overview"; renderNav();
   $("#main").innerHTML = '<div class="view wide empty"><span class="spinner"></span></div>';
-  const f = await api("/api/focus?module=" + encodeURIComponent(path));
+  const f = await api("/api/focus?mode=" + (mapMode || "folders") + "&module=" + encodeURIComponent(path));
   focusLink = null;
   const name = (p) => p || "(root)";
   const W = 960, bw = 240, bh = 58, gap = 14, colX = [10, (W - bw) / 2, W - bw - 10];
@@ -418,19 +421,19 @@ async function vFocus(path) {
   svg += "</svg>";
   const extra = (list, n) => (list.length > n ? '<p class="muted" style="font-size:12.5px">+ ' + (list.length - n) + " more: " + list.slice(n).map((l) => '<button class="lnk" data-focus="' + esc(l.path) + '">' + esc(name(l.path)) + "</button>").join(", ") + "</p>" : "");
   $("#main").innerHTML = '<div class="view wide"><button class="lnk" data-view="overview">← All parts</button><h1 class="mono" style="font-size:24px;margin-top:10px">' + esc(name(f.path)) + "</h1>" + (f.about ? '<p class="lede">' + prose(f.about) + "</p>" : "") +
-    '<p class="muted" style="font-size:13px">Only this part and its neighbours. Thicker arrows mean more files import across that link. Click a box to move the focus there, or an arrow to see the files behind it.</p>' +
+    '<p class="muted" style="font-size:13px">'+(mapMode === "services" ? "Only this service and the services it talks to. Thicker arrows mean more calls." : "Only this part and its neighbours. Thicker arrows mean more files import across that link.")+'  Click a box to move the focus there, or an arrow to see the files behind it.</p>' +
     '<div class="focusgrid"><div class="figure fx">' + svg + extra(f.usedBy, MAXN) + extra(f.uses, MAXN) + '</div><div class="card fside" id="fside"></div></div></div>';
   const side = () => {
     let h = "";
     if (focusLink) {
       const [dir, p] = [focusLink.slice(0, focusLink.indexOf(":")), focusLink.slice(focusLink.indexOf(":") + 1)];
       const l = (dir === "in" ? f.usedBy : f.uses).find((x) => x.path === p);
-      if (l) h += '<button class="lnk" id="fsideback">← About this part</button><h3 style="margin-top:8px">' + esc(dir === "in" ? name(p) + " → " + name(f.path) : name(f.path) + " → " + name(p)) + '</h3><p class="muted" style="font-size:12.5px">' + l.weight + " import" + (l.weight === 1 ? "" : "s") + ":</p>" + groupPairs(l.files) + (l.weight > l.files.length ? '<p class="muted">…and ' + (l.weight - l.files.length) + " more</p>" : "") + '<p style="margin-top:10px"><button class="btn" data-focus="' + esc(p) + '">Focus on ' + esc(trunc(name(p), 24)) + "</button></p>";
+      if (l) h += '<button class="lnk" id="fsideback">← About this part</button><h3 style="margin-top:8px">' + esc(dir === "in" ? name(p) + " → " + name(f.path) : name(f.path) + " → " + name(p)) + '</h3><p class="muted" style="font-size:12.5px">' + l.weight + (mapMode === "services" ? " call" : " import") + (l.weight === 1 ? "" : "s") + ":</p>" + groupPairs(l.files) + (l.weight > l.files.length ? '<p class="muted">…and ' + (l.weight - l.files.length) + " more</p>" : "") + '<p style="margin-top:10px"><button class="btn" data-focus="' + esc(p) + '">Focus on ' + esc(trunc(name(p), 24)) + "</button></p>";
     }
     if (!h) {
-      h = "<h3 style=\"margin-top:0\">Read first</h3>" + f.readFirst.map((x) => '<div style="margin-bottom:6px">' + loc(x.path, 0, x.path.split("/").pop()) + ' <span class="muted" style="font-size:12px">imported by ' + x.usedBy + "</span>" + (x.doc ? '<div class="muted" style="font-size:12.5px">' + esc(firstSentence(x.doc)) + "</div>" : "") + "</div>").join("") +
+      h = "<h3 style=\"margin-top:0\">" + (mapMode === "services" ? "Where it lives" : "Read first") + "</h3>" + f.readFirst.map((x) => '<div style="margin-bottom:6px">' + loc(x.path, 0, x.path.split("/").pop()) + ' <span class="muted" style="font-size:12px">imported by ' + x.usedBy + "</span>" + (x.doc ? '<div class="muted" style="font-size:12.5px">' + esc(firstSentence(x.doc)) + "</div>" : "") + "</div>").join("") +
         (f.cycles.length ? '<h3>Cycles</h3><p style="font-size:13px">It and ' + f.cycles.map((c) => "<b>" + esc(name(c)) + "</b>").join(", ") + " import each other, so a change on either side can ripple back.</p>" : "") +
-        '<p style="margin-top:12px"><button class="btn" data-module="' + esc(f.path) + '">See all its files</button></p>';
+        (mapMode === "services" ? "" : '<p style="margin-top:12px"><button class="btn" data-module="' + esc(f.path) + '">See all its files</button></p>');
     }
     $("#fside").innerHTML = h;
     const b = $("#fsideback"); if (b) b.addEventListener("click", () => { focusLink = null; side(); });
@@ -447,7 +450,7 @@ async function vFocus(path) {
 function groupPairs(files) {
   const by = new Map();
   for (const [a, b] of files) (by.get(b) || by.set(b, []).get(b)).push(a);
-  return [...by].map(([b, as]) => '<div class="pair">' + loc(b, 0, b.split("/").slice(-2).join("/")) + ' <span class="muted">used by ' + as.length + ":</span> " + as.slice(0, 12).map((a) => loc(a, 0, a.split("/").pop())).join(", ") + (as.length > 12 ? " …" : "") + "</div>").join("");
+  return [...by].map(([b, as]) => '<div class="pair">' + (b.includes("/") ? loc(b, 0, b.split("/").slice(-2).join("/")) : "<code>" + esc(b) + "</code>") + ' <span class="muted">' + (b.includes("/") ? "used by " : "called from ") + as.length + ":</span> " + as.slice(0, 12).map((a) => { const m = /^(.*):(\d+)$/.exec(a); return m ? loc(m[1], Number(m[2]), m[1].split("/").pop() + ":" + m[2]) : loc(a, 0, a.split("/").pop()); }).join(", ") + (as.length > 12 ? " …" : "") + "</div>").join("");
 }
 const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
 
@@ -1122,6 +1125,7 @@ document.addEventListener("click", async (e) => {
     if (d.crumb !== undefined) return d.crumb === "back" ? stepBack() : stepBack(Number(d.crumb));
     if (d.area !== undefined) { mapAreas = d.area ? (mapAreas.includes(d.area) ? mapAreas.filter((x) => x !== d.area) : mapAreas.concat(d.area)) : []; document.querySelectorAll("[data-area]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.area ? mapAreas.includes(b.dataset.area) : !mapAreas.length))); return redrawMap(); }
     if (d.focus !== undefined) return vFocus(d.focus);
+    if (d.mapmode) { mapMode = d.mapmode; return vOverview(); }
     if (t.id === "dback") return drawerBack();
     if (d.readas !== undefined) { closeFile(); tstack = []; return stepInto(d.readas, Number(d.line), ""); }
     if (d.open !== undefined) return openFile(d.open, Number(d.line) || 0);

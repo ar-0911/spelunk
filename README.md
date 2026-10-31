@@ -50,11 +50,11 @@ spelunk ui
 
 This opens Spelunk in your browser. Choose a project folder and click around:
 
-- **Overview**: what the project is, where the program starts, which files to read first, how to run it, a diagram of how the parts connect, and every part with its summary.
+- **Overview**: what the project is, where the program starts, which files to read first, how to run it, a diagram of how the parts connect, and every part with its summary. Point at a box in the diagram to light up its links; click it to see just that part, what uses it and what it uses, with the files behind each arrow. Moleculer apps get a **Services** map too: a box per service, arrows for `ctx.call` and events.
 - **First day**: a guided walk through the project in about ten steps, each naming the files to open in order. Tick steps off; progress is kept in your browser.
 - **Find**: type plain words ("send email", "payment failed") and jump to the code.
 - **Ask**: ask a question in plain words. Claude searches and reads the code and answers with links to the lines it used.
-- **Trace**: pick a web address or function and see who calls it and what it calls.
+- **Trace**: read how the code runs, one function at a time. Pick a web address or function and you get its code with every call numbered in the order it runs, a plain-English line for each step (from the code's comments, or from Claude if you click Explain), and who calls it. Click a numbered call to step into it; the trail at the top is your call stack, and Backspace steps back. Small helpers and calls into packages are folded away until you ask for them.
 - **Error lookup**: paste an error or a whole stack trace and get the line that raised it, even from a server or compiled code.
 - **Changes**: what your branch touches compared with main: functions edited, what depends on them, routes to re-check, tests to run.
 - **Agents** (when the project runs [Braid](#with-braid)): what each agent is changing, on the map of the code, and where they're about to collide. **Fix with Braid** on Risks and Error lookup hands the finding to a new agent.
@@ -64,7 +64,7 @@ This opens Spelunk in your browser. Choose a project folder and click around:
 
 You can also paste a GitHub, GitLab or Bitbucket link instead of choosing a folder; Spelunk downloads it (with an access token for private repositories, used once and never saved).
 
-Click any `path:line` to read the code there, with a "What's in it" tab listing the file's functions, imports, settings and errors.
+Click any `path:line` to read the code there, with a "What's in it" tab listing the file's functions, imports, settings and errors. Underlined calls in the code jump to their definition, and Back returns to where you were.
 
 The dashboard runs on your machine at `127.0.0.1` only. It prints a link with a one-time token; on first load the token is swapped for an HttpOnly cookie and the link is replaced, so it doesn't sit in your browser history. Requests without the cookie (or the `x-spelunk-token` header, for scripts) are refused, so other websites open in your browser can't read your code through it. The folder picker stays inside your home folder; start it with `--allow-any-path` to open folders elsewhere.
 
