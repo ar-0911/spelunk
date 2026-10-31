@@ -8,6 +8,7 @@ What it does differently from `spelunk ui`, so it's safe on the open internet:
 - **No local files.** The folder picker, Braid and publishing to Elemnt are switched off.
 - **Visitors bring their own Claude key.** `ANTHROPIC_API_KEY` is ignored, so strangers can't spend your credit. A pasted key stays in memory for that visitor's session only and is never written to disk or logs.
 - **One session per browser**, in an HttpOnly cookie. Everyone who opens the same repository shares one download and one scan of it.
+- **Remote MCP at `/mcp`**, for claude.ai and Claude Code: the same public-only rules, no sign-in, nothing kept per caller. Each tool call names the repository. See [Claude on the web](../README.md#with-claude-on-the-web-claudeai).
 - **Limits.** Two downloads or scans run at once (the rest wait), each address may start 20 downloads an hour, git gets 3 minutes per download, and the 30 most recently opened repositories are kept on disk.
 
 ## Try it locally
@@ -38,7 +39,7 @@ npx wrangler tail        # logs, in another terminal
 
 Wrangler prints the address, `https://spelunk.<your-subdomain>.workers.dev`. The first visit starts the container, which takes a few seconds; after 30 minutes without visitors it sleeps, and its sessions and downloads are forgotten. To use your own hostname, uncomment `routes` in `wrangler.jsonc` and deploy again.
 
-Settings are the `vars` in `wrangler.jsonc`: `SPELUNK_ALLOWED_HOSTS`, `SPELUNK_MAX_REPOS` and `SPELUNK_CLONES_PER_HOUR`. Don't add Claude keys or git tokens as secrets; the server ignores them.
+Settings are the `vars` in `wrangler.jsonc`: `SPELUNK_ALLOWED_HOSTS`, `SPELUNK_MAX_REPOS`, `SPELUNK_CLONES_PER_HOUR` and `SPELUNK_MCP_DOWNLOADS_PER_HOUR` (new repositories `/mcp` may download in an hour, all callers together, because claude.ai's requests all come from Anthropic's addresses). Don't add Claude keys or git tokens as secrets; the server ignores them.
 
 ## Anywhere else
 

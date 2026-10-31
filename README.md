@@ -11,7 +11,7 @@ Understand any codebase: where code lives, how it's written, and how the pieces 
 
 Spelunk reads the repository with [tree-sitter](https://tree-sitter.github.io/) to build a map of files, symbols, imports, HTTP routes, environment variables and commands. That part is fast, offline and free. On top of it, Claude can write the parts static analysis can't: what each module is for, how the main flows work, and where to look when something fails.
 
-You use it from the terminal, or let Claude Code (or any MCP client) ask it questions while it works.
+You use it from the terminal, or let Claude ask it questions while it works: Claude Code on your machine, or claude.ai through the hosted server's MCP connector.
 
 ```
 $ spelunk trace "PUT /api/pages/:id"
@@ -134,12 +134,39 @@ To keep it current, run it in CI on every merge to main. [`examples/ci`](example
 ## With Claude Code (MCP)
 
 ```sh
-claude mcp add spelunk -- spelunk mcp
+spelunk setup claude
 ```
 
-Claude Code starts the server in your project directory. It gets these tools: `overview`, `where`, `trace`, `file`, `module`, `dependencies`, `dependents`, `symbols`, `routes`, `env_vars`, `risks`, `lookup_error`, `impact`, `onboarding_tour`, `agents` (with Braid) and `rescan`. They answer from the index instead of reading whole files, so Claude spends fewer tokens finding its way around. Before each answer the server checks `git status` and rescans only when something changed, reparsing just the changed files, so Claude sees its own edits without waiting on a scan every call. Outside git it rescans when the index is more than 20 seconds old.
+That does two things, and running it again updates both:
+
+1. Registers `spelunk mcp` with Claude Code for **every project** (user scope). Claude Code starts it inside whichever repository it opens. It's the same as `claude mcp add --scope user spelunk -- spelunk mcp`, but with full paths so it works however you installed Spelunk.
+2. Adds a short note to `~/.claude/CLAUDE.md` telling Claude to ask Spelunk before it greps or reads whole files. The tools alone aren't enough, because Claude tends to grep out of habit. The note sits between `<!-- spelunk:start -->` and `<!-- spelunk:end -->`, so delete that block to remove it.
+
+Use `--dry-run` to see what it would do first. Restart Claude Code (or run `/mcp` in it) afterwards, and check with `claude mcp list`.
+
+Claude gets these tools: `overview`, `where`, `trace`, `source`, `file`, `module`, `dependencies`, `dependents`, `symbols`, `routes`, `env_vars`, `risks`, `lookup_error`, `impact`, `onboarding_tour`, `agents` (with Braid) and `rescan`. They answer from the index instead of whole files. For example, `source saveNote` returns that one function, and `file` lists a file's functions with line numbers so Claude can pick one. That saves Claude a lot of tokens finding its way around. Before each answer the server checks `git status` and rescans only when something changed, reparsing just the changed files, so Claude sees its own edits without waiting on a scan every call. Outside git it rescans when the index is more than 20 seconds old. Started outside a project (in your home folder, say), the tools say so instead of indexing everything.
+
+This works on private repositories too. Nothing leaves your machine.
 
 For other MCP clients, run `spelunk mcp -C /path/to/repo` as a stdio server.
+
+## With Claude on the web (claude.ai)
+
+A hosted Spelunk (`spelunk serve`, see [deploy](deploy/README.md)) also serves MCP at `/mcp`, so Claude on claude.ai, the desktop app and mobile can use it as a custom connector. For the public instance:
+
+1. In claude.ai open **Settings → Connectors → Add custom connector**.
+2. Name it `Spelunk`, set the URL to `https://spelunk.adityapoc.xyz/mcp`, and add it. There's no sign-in.
+3. In a chat, turn on Spelunk from the tools menu and ask about a repository by link, for example "Using Spelunk, how does a request reach the database in https://github.com/owner/repo?"
+
+Every tool takes a `repo` argument: a public GitHub, GitLab or Bitbucket link, or `owner/name` for GitHub. The first call downloads and indexes it, and later calls (from anyone) reuse that copy. A big repository can take longer than one tool call allows; the tool then says it's still indexing, and Claude calls it again. The remote server has the same tools as the local one minus `impact`, `agents` and `rescan` (they need your own working copy), plus `search_text`, a plain text search, because Claude on the web has no grep.
+
+**Public repositories only**, like the rest of the hosted site. For private code use Claude Code with `spelunk setup claude`, which runs on your machine.
+
+Claude Code can use the hosted server too, for public repos you haven't cloned:
+
+```sh
+claude mcp add --transport http spelunk-web https://spelunk.adityapoc.xyz/mcp
+```
 
 ## With Braid
 
