@@ -48,6 +48,8 @@ Commands
   explain              Ask Claude for module summaries, flows and a debugging guide (shows cost first)
   publish              Publish the map as a page in Elemnt (create or update; for CI too)
   ui                   Open the dashboard in your browser: everything above, no commands needed
+  serve                Run the dashboard as a public website: visitors paste public repo links and bring
+                       their own Claude key (see deploy/README.md)
   mcp                  Run as an MCP server on stdio, for Claude Code and other agents
   facts                For other tools: parse files sent as JSON on stdin, print symbols and calls
   outline              For other tools: split files sent as JSON on stdin into entities and class members
@@ -83,6 +85,7 @@ Options
   --port <n>           ui: port to listen on (default: any free port)
   --no-open            ui: don't open a browser, just print the link
   --allow-any-path     ui: let the folder picker go outside your home folder
+  --host <addr>        serve: address to listen on (default 0.0.0.0); port from --port or PORT (default 8080)
   -h, --help, -v, --version
 `;
 
@@ -117,6 +120,7 @@ async function main(argv: string[]): Promise<number> {
       draft: { type: "boolean" },
       "dry-run": { type: "boolean" },
       "allow-any-path": { type: "boolean" },
+      host: { type: "string" },
       "price-in": { type: "string" },
       "price-out": { type: "string" },
       help: { type: "boolean", short: "h" },
@@ -338,6 +342,26 @@ async function main(argv: string[]): Promise<number> {
       const inProject = values.cwd !== undefined || existsSync(join(root, ".git")) || ["package.json", "pyproject.toml", "go.mod", "Cargo.toml"].some((f) => existsSync(join(root, f)));
       const ui = await startUi({ ...(inProject ? { root } : {}), ...(values.port ? { port: Number(values.port) } : {}), open: !values["no-open"], ...(values["allow-any-path"] ? { allowAnyPath: true } : {}), log: (m) => process.stderr.write(`${m}\n`) });
       process.stdout.write(`Spelunk is running at ${ui.url}\nPress Ctrl+C to stop.\n`);
+      return -1;
+    }
+    case "serve": {
+      // A public site must never spend the operator's Claude credit or read private repos with their token.
+      for (const name of ["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "GITHUB_TOKEN", "GH_TOKEN", "GITLAB_TOKEN", "BITBUCKET_TOKEN", "SPELUNK_GIT_TOKEN"]) {
+        if (process.env[name]) process.stderr.write(`Ignoring ${name}: visitors bring their own keys, and only public repositories are opened.\n`);
+        delete process.env[name];
+      }
+      const { startUi } = await import("./ui/server.js");
+      const list = (name: string) => process.env[name]?.split(",").map((x) => x.trim()).filter(Boolean);
+      const int = (name: string) => (process.env[name] ? Number(process.env[name]) : undefined);
+      const hosts = list("SPELUNK_ALLOWED_HOSTS");
+      const opt = <T>(key: string, v: T | undefined) => (v === undefined ? {} : { [key]: v });
+      const ui = await startUi({
+        port: Number(values.port ?? process.env.PORT ?? 8080),
+        open: false,
+        hosted: { ...opt("host", values.host), ...opt("allowedHosts", hosts), ...opt("maxRepos", int("SPELUNK_MAX_REPOS")), ...opt("clonesPerHour", int("SPELUNK_CLONES_PER_HOUR")) },
+        log: (m) => process.stderr.write(`${m}\n`),
+      });
+      process.stdout.write(`Spelunk is serving on ${ui.url}\n`);
       return -1;
     }
     case "mcp": {

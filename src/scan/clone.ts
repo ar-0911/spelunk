@@ -82,15 +82,24 @@ export const reposDir = () => process.env.SPELUNK_HOME ? join(process.env.SPELUN
 
 export interface CloneOptions {
   token?: string;
+  /** Fall back to GITHUB_TOKEN and friends from the environment. Default true; the hosted dashboard turns it off. */
+  useEnvToken?: boolean;
+  /** How long one git command may run. Default 10 minutes. */
+  timeoutMs?: number;
   onProgress?(message: string): void;
+}
+
+/** Where cloneRepo keeps a repository on disk. */
+export function repoDir(repo: RemoteRepo): string {
+  return join(reposDir(), repo.host.replace(/[^\w.-]/g, "_"), ...repo.path.split("/").map((p) => p.replace(/[^\w.-]/g, "_")));
 }
 
 /** Clones (or updates) the repository and returns the local folder. */
 export async function cloneRepo(input: string, options: CloneOptions = {}): Promise<string> {
   const repo = parseRepoUrl(input);
   if (!repo) throw new Error(`"${input}" doesn't look like a repository link. Paste a link like https://github.com/owner/repo or git@bitbucket.org:team/repo.git.`);
-  const dir = join(reposDir(), repo.host.replace(/[^\w.-]/g, "_"), ...repo.path.split("/").map((p) => p.replace(/[^\w.-]/g, "_")));
-  const token = options.token ?? (repo.ssh ? undefined : tokenFromEnv(repo.host));
+  const dir = repoDir(repo);
+  const token = options.token ?? (repo.ssh || options.useEnvToken === false ? undefined : tokenFromEnv(repo.host));
   const config = [
     // Only real network transports; no ext::, file:// or other local protocols from a pasted link.
     "-c", "protocol.allow=never", "-c", "protocol.https.allow=always", "-c", "protocol.http.allow=always", "-c", "protocol.ssh.allow=always",
@@ -98,7 +107,7 @@ export async function cloneRepo(input: string, options: CloneOptions = {}): Prom
   ];
   const env = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
   const git = (args: string[], cwd?: string) =>
-    run("git", [...config, ...args], { env, maxBuffer: 64 * 1024 * 1024, timeout: 10 * 60_000, ...(cwd ? { cwd } : {}) }).catch((err: { stderr?: string; message: string }) => {
+    run("git", [...config, ...args], { env, maxBuffer: 64 * 1024 * 1024, timeout: options.timeoutMs ?? 10 * 60_000, ...(cwd ? { cwd } : {}) }).catch((err: { stderr?: string; message: string }) => {
       const msg = (err.stderr || err.message).replace(/Authorization: Basic \S+/g, "Authorization: ***");
       if (/Authentication failed|could not read Username|403|401|Repository not found|access denied|Permission denied/i.test(msg))
         throw new Error(`Couldn't access ${repo.host}/${repo.path}. If it's private, add an access token${repo.ssh ? " or check your SSH key" : ""}.`);

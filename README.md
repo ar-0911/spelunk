@@ -61,6 +61,10 @@ Click any `path:line` to read the code there, with a "What's in it" tab listing 
 
 The dashboard runs on your machine at `127.0.0.1` only. It prints a link with a one-time token; on first load the token is swapped for an HttpOnly cookie and the link is replaced, so it doesn't sit in your browser history. Requests without the cookie (or the `x-spelunk-token` header, for scripts) are refused, so other websites open in your browser can't read your code through it. The folder picker stays inside your home folder; start it with `--allow-any-path` to open folders elsewhere.
 
+## Host it for other people
+
+`spelunk serve` runs the dashboard as a public website: visitors paste a public GitHub, GitLab or Bitbucket link, and bring their own Anthropic key for Ask and Explain. It has no folder picker, takes no git tokens and ignores the server's own Claude key. A Dockerfile and a Cloudflare deploy are included; see [deploy/README.md](deploy/README.md).
+
 ## Commands
 
 Run these inside the repository you want to understand, or pass `-C <dir>`. `-C` also takes a repository link (see below).

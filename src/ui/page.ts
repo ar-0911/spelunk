@@ -6,6 +6,8 @@ import { THEME_CSS } from "../report/html.js";
  */
 
 const CSS = `
+.hosted .localonly{display:none!important}
+body:not(.hosted) .hostedonly{display:none!important}
 ${THEME_CSS}
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -200,7 +202,7 @@ const icon = (d) => '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
 
 function renderNav() {
   const counts = { risks: report ? report.risks.reduce((n, g) => n + g.items.length, 0) : "", routes: report ? report.routes.length : "", config: report ? report.env.length : "" };
-  $("#nav").innerHTML = VIEWS.filter(([id]) => id !== "agents" || (state.braid && state.braid.here)).map(([id, label, d]) => '<button class="navb" data-view="' + id + '"' + (view === id ? ' aria-current="page"' : "") + ">" + icon(d) + esc(label) + (counts[id] !== undefined && counts[id] !== "" ? '<span class="n">' + counts[id] + "</span>" : "") + "</button>").join("") +
+  $("#nav").innerHTML = VIEWS.filter(([id]) => (id !== "agents" || (state.braid && state.braid.here)) && !(state.hosted && id === "share")).map(([id, label, d]) => '<button class="navb" data-view="' + id + '"' + (view === id ? ' aria-current="page"' : "") + ">" + icon(d) + esc(label) + (counts[id] !== undefined && counts[id] !== "" ? '<span class="n">' + counts[id] + "</span>" : "") + "</button>").join("") +
     '<p class="navhint">Click any <span class="mono" style="color:var(--accent-ink)">path:line</span> to read the code there.</p>';
 }
 
@@ -218,6 +220,13 @@ function go(v, arg) {
 
 // ---------- Welcome & folder picker
 function renderWelcome() {
+  if (state.hosted) {
+    $("#main").innerHTML = '<div class="welcome"><h1>Find your way around a codebase</h1><p class="lede">Paste a link to a public repository and Spelunk shows you how it fits together: what each part does, where things live, how a request flows through the code, and where bugs are likely to hide.</p>' +
+      '<form id="hostform" style="display:flex;gap:8px;margin-top:20px;max-width:640px"><input class="field" id="hosturl" placeholder="https://github.com/owner/repo" aria-label="Repository link" autocomplete="off" style="flex:1;max-width:none"><button class="btn primary">Open</button></form>' +
+      '<ol><li>Works with public repositories on GitHub, GitLab and Bitbucket.</li><li>Reading the code and drawing the map is free. Ask and Explain use Claude with your own Anthropic API key, which this server keeps in memory for your visit only and never stores.</li><li>For private code, run Spelunk on your own computer: <code>npx spelunk-cli ui</code>.</li><li>New here? Start with First day. Looking for something? Use Find or Ask.</li></ol></div>';
+    $("#hostform").addEventListener("submit", (e) => { e.preventDefault(); $("#cloneurl").value = $("#hosturl").value; useLink(); });
+    return;
+  }
   $("#main").innerHTML = '<div class="welcome"><h1>Find your way around a codebase</h1><p class="lede">Spelunk reads a project folder and shows you how it fits together: what each part does, where things live, how a request flows through the code, and where bugs are likely to hide.</p>' +
     '<p style="margin-top:20px"><button class="btn primary" data-pick>Choose a project folder</button></p><ol><li>Pick the folder that holds the code (the one with package.json, pyproject.toml, go.mod or .git).</li><li>Spelunk reads it locally. Nothing leaves your computer unless you ask Claude to explain it.</li><li>Or paste a GitHub, GitLab or Bitbucket link and Spelunk downloads it for you.</li><li>New here? Start with First day. Looking for something? Use Find or Ask.</li></ol></div>';
 }
@@ -230,6 +239,7 @@ function rememberFolder(path) {
 async function openPicker(dir) {
   const d = $("#picker");
   if (!d.open) d.showModal();
+  if (state.hosted) { $("#cloneurl").focus(); return; }
   try {
     const r = await api("/api/browse?dir=" + encodeURIComponent(dir || state.root || state.home));
     pickerDir = r.dir;
@@ -275,8 +285,9 @@ async function refresh() {
 }
 
 function renderTop() {
-  $("#repo").innerHTML = state.root ? '<span class="path" title="' + esc(state.root) + '">' + esc(state.root) + '</span><button class="btn" data-pick>Change</button>' : '<button class="btn" data-pick>Choose a folder</button>';
-  $("#actions").innerHTML = state.root ? '<button class="btn" id="rescan" title="Read the folder again after changes">Rescan</button><a class="btn" target="_blank" rel="noopener" href="/guide">Field guide ↗</a>' : "";
+  const shown = state.hosted ? (report && report.remote ? report.remote.replace(/^https:\/\//, "") : state.pending || "") : state.root;
+  $("#repo").innerHTML = state.root ? '<span class="path" title="' + esc(shown) + '">' + esc(shown) + '</span><button class="btn" data-pick>Change</button>' : '<button class="btn" data-pick>' + (state.hosted ? "Open a repository" : "Choose a folder") + "</button>";
+  $("#actions").innerHTML = state.root ? (state.hosted ? "" : '<button class="btn" id="rescan" title="Read the folder again after changes">Rescan</button>') + '<a class="btn" target="_blank" rel="noopener" href="/guide">Field guide ↗</a>' : "";
 }
 
 // ---------- Overview
@@ -437,7 +448,7 @@ async function vExplain() {
   try {
     const p = await api("/api/explain/plan");
     $("#plan").innerHTML = '<div class="card" style="max-width:640px"><h4>What it will cost</h4><p>' + p.modules.length + " parts, about " + fmt(Math.round(p.estimate.inputTokens / 1000)) + "k tokens in and " + fmt(Math.round(p.estimate.outputTokens / 1000)) + "k out with " + esc(p.model) + ": roughly <b>$" + p.estimate.dollars.toFixed(2) + "</b>, charged to your Anthropic account.</p>" +
-      (state.hasEnvKey ? '<p class="muted" style="font-size:13px">Using the ANTHROPIC_API_KEY Spelunk was started with.</p>' : '<label for="key" style="font-size:13px">Anthropic API key</label><input class="field" id="key" type="password" autocomplete="off" placeholder="sk-ant-…" style="display:block;width:100%;margin:4px 0 6px"><p class="muted" style="font-size:12.5px">Used for this run only. It is not saved anywhere. Get one at console.anthropic.com.</p>') +
+      (state.hasEnvKey ? '<p class="muted" style="font-size:13px">Using the ANTHROPIC_API_KEY Spelunk was started with.</p>' : '<label for="key" style="font-size:13px">Anthropic API key</label><input class="field" id="key" type="password" autocomplete="off" placeholder="sk-ant-…" style="display:block;width:100%;margin:4px 0 6px"><p class="muted" style="font-size:12.5px">' + (state.hosted ? "Sent to this server for this run only, and never stored or logged." : "Used for this run only. It is not saved anywhere.") + ' Get one at console.anthropic.com.</p>') +
       '<button class="btn primary" id="go">Explain this project</button></div>';
     $("#go").addEventListener("click", startExplain);
   } catch (e) { $("#plan").innerHTML = '<div class="note err">' + esc(e.message) + "</div>"; }
@@ -526,7 +537,7 @@ function vAsk() {
   let h = '<div class="view"><h1>Ask</h1><p class="lede">Ask anything about this code in plain words. Claude searches and reads the project the way an engineer would, and every answer links to the lines it is based on.</p>' +
     '<div id="convo">' + askHistory.map((x) => '<div class="q">' + esc(x.question) + '</div><div class="a">' + md(x.answer) + (x.steps ? '<details class="muted" style="font-size:12.5px"><summary>Looked at ' + x.steps.length + " places</summary>" + x.steps.map((s) => "<div>" + esc(s.label) + "</div>").join("") + "</details>" : "") + "</div>").join("") + '</div><div id="askrun"></div>' +
     '<form id="askf" class="askbox"><textarea class="field" id="askq" rows="3" placeholder="e.g. How does saving a page work? Where are permissions checked? Why would login fail with a 401?" aria-label="Your question"></textarea>' +
-    (needKey ? '<input class="field" id="askkey" type="password" autocomplete="off" placeholder="Anthropic API key (sk-ant-…), kept in memory until you close Spelunk" aria-label="Anthropic API key">' : "") +
+    (needKey ? '<input class="field" id="askkey" type="password" autocomplete="off" placeholder="Anthropic API key (sk-ant-…), ' + (state.hosted ? "kept in memory on this server for your visit only" : "kept in memory until you close Spelunk") + '" aria-label="Anthropic API key">' : "") +
     '<div style="display:flex;gap:8px;align-items:center"><button class="btn primary" id="askgo">Ask</button>' + (askHistory.length ? '<button type="button" class="btn" id="asknew">New conversation</button>' : "") + '<span class="muted" style="font-size:12.5px">Uses ' + esc(state.model) + " on your Anthropic account; a question usually costs a few cents.</span></div></form>";
   if (!askHistory.length) h += '<div class="chips" style="margin-top:12px">' + ["What does this project do, in two sentences?", "How does a request reach the database?", "Where is authentication handled?", "What should I read first to fix bugs here?"].map((x) => '<button class="chip" data-ask="' + esc(x) + '">' + esc(x) + "</button>").join("") + "</div>";
   $("#main").innerHTML = h + "</div>";
@@ -725,6 +736,7 @@ async function useLink() {
   const tok = $("#clonetok").value;
   $("#picker").close();
   state.root = url;
+  state.pending = url;
   report = null;
   renderTop();
   view = "overview";
@@ -810,7 +822,7 @@ document.addEventListener("click", async (e) => {
 });
 $("#scrim").addEventListener("click", closeFile);
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeFile(); if (e.key === "/" && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); go("find"); } });
-$("#pickform").addEventListener("submit", (e) => { e.preventDefault(); useFolder($("#pickpath").value || pickerDir); });
+$("#pickform").addEventListener("submit", (e) => { e.preventDefault(); if (state.hosted) return useLink(); useFolder($("#pickpath").value || pickerDir); });
 $("#browse").addEventListener("click", () => openPicker($("#pickpath").value));
 // Enter in the path box goes to that folder; "Use this folder" opens it.
 $("#pickpath").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); openPicker($("#pickpath").value); } });
@@ -822,6 +834,7 @@ try { const th = localStorage.getItem("spelunk-theme"); if (th) document.documen
 (async () => {
   try {
     state = await api("/api/state");
+    if (state.hosted) document.body.classList.add("hosted");
     renderTop();
     go("overview");
     if (state.root) await refresh();
@@ -860,8 +873,9 @@ export function dashboardHtml(): string {
   <div class="tabs" id="dtabs" role="tablist"><button role="tab" data-tab="code" aria-selected="true">Code</button><button role="tab" data-tab="outline" aria-selected="false">What's in it</button></div>
   <div class="pane" id="dpane"></div>
 </aside>
-<dialog id="picker" aria-label="Choose a project folder">
+<dialog id="picker" aria-label="Choose a project">
   <form class="dlg" id="pickform">
+    <div class="localonly" style="display:grid;gap:inherit">
     <h2 style="margin:0">Choose a project folder</h2>
     <div class="chips" id="pickshort" style="margin:0"></div>
     <div style="display:flex;gap:8px"><input class="field" id="pickpath" aria-label="Folder path" placeholder="Type or paste a path, e.g. ~/code/my-app" style="flex:1;max-width:none"><button type="button" class="btn" id="browse">Go</button></div>
@@ -871,10 +885,13 @@ export function dashboardHtml(): string {
     <div class="dirs" id="dirs"></div>
     <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn" onclick="this.closest('dialog').close()">Cancel</button><button class="btn primary">Use this folder</button></div>
     <div class="orline">or paste a repository link</div>
+    </div>
+    <h2 class="hostedonly" style="margin:0">Open a public repository</h2>
     <input class="field" id="cloneurl" placeholder="https://github.com/owner/repo, https://bitbucket.org/team/repo, …" aria-label="Repository link" autocomplete="off" style="max-width:none">
-    <input class="field" id="clonetok" type="password" placeholder="Access token, only for private repositories" aria-label="Access token" autocomplete="off" style="max-width:none">
-    <p class="muted" style="margin:0;font-size:12.5px">The token is used for this download only and is never saved. Spelunk keeps the copy in ~/.spelunk/repos.</p>
-    <div style="display:flex;justify-content:flex-end"><button type="button" class="btn" id="clonego">Download and open</button></div>
+    <input class="field localonly" id="clonetok" type="password" placeholder="Access token, only for private repositories" aria-label="Access token" autocomplete="off" style="max-width:none">
+    <p class="muted localonly" style="margin:0;font-size:12.5px">The token is used for this download only and is never saved. Spelunk keeps the copy in ~/.spelunk/repos.</p>
+    <p class="muted hostedonly" style="margin:0;font-size:12.5px">GitHub, GitLab or Bitbucket. For private code, run <code>npx spelunk-cli ui</code> on your own computer.</p>
+    <div style="display:flex;gap:8px;justify-content:flex-end"><button type="button" class="btn hostedonly" onclick="this.closest('dialog').close()">Cancel</button><button type="button" class="btn" id="clonego">Download and open</button></div>
   </form>
 </dialog>
 <script>${JS}</script>
