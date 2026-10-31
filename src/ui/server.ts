@@ -12,9 +12,12 @@ import { formatOverview } from "../format.js";
 import { agentMarks, agentsOnMap, braidHere, braidInstalled, braidState, errorTask, riskTask, startBraid } from "../integrations/braid.js";
 import { lookupError } from "../query/errors.js";
 import { defaultBase, gitDiff, impact, listBranches, mergeBase, snapshotRef } from "../query/impact.js";
-import { resolveTarget, trace } from "../query/trace.js";
+import { definition, resolveTarget, trace } from "../query/trace.js";
+import { frame, pickTarget } from "../query/walk.js";
+import { captionFrame } from "../explain/steps.js";
 import { where, type Hit } from "../query/where.js";
 import { diagramSvg } from "../report/diagram.js";
+import { areaOf, focus } from "../report/focus.js";
 import { publishToElemnt, renderElemnt } from "../report/elemnt.js";
 import { renderHtml } from "../report/html.js";
 import { buildReport, type Report } from "../report/model.js";
@@ -188,6 +191,11 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
       });
     return s.scanning;
   };
+  /** A file's text, read only when it's in the index and still inside the repository (not swapped for a symlink since). */
+  const sourceOf = async (w: Workspace, path: string): Promise<string> => {
+    const abs = join(w.index.root, path);
+    return (await within(w.index.root, abs)) ? await readFile(abs, "utf8").catch(() => "") : "";
+  };
   const getReport = async (s: Session): Promise<Report> => {
     const w = await load(s, false);
     s.report ??= buildReport(w.index, w.graph, await w.risks(), await w.explanations());
@@ -339,7 +347,9 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
     "GET /api/report": async (s) => {
       const r = await getReport(s);
       const braid = s.root ? await braidState(s.root) : undefined;
-      return { ...r, diagram: diagramSvg(r.modules, braid && agentMarks(agentsOnMap(braid, r))) };
+      const areas = new Map<string, number>();
+      for (const m of r.modules) areas.set(areaOf(m), (areas.get(areaOf(m)) ?? 0) + 1);
+      return { ...r, diagram: diagramSvg(r.modules, braid && agentMarks(agentsOnMap(braid, r))), areas: [...areas].map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name)) };
     },
 
     "GET /api/agents": async (s) => {
@@ -390,6 +400,56 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
       };
     },
 
+    // The trace reader: one function or route handler, its calls in order, its code and its callers.
+    "GET /api/frame": async (s, q) => {
+      const w = await load(s, false);
+      const { target, choices } = pickTarget(w.index, { target: q.get("target") ?? "", path: q.get("path") ?? "", line: Number(q.get("line")) || 0 });
+      const list = choices.map((c) => ({ kind: c.kind, label: c.label, path: c.path, line: c.line ?? null, doc: c.symbol?.doc ?? null }));
+      if (!target) return { choices: list };
+      return { frame: frame(w.index, w.graph, target, await sourceOf(w, target.path)) ?? null, choices: list };
+    },
+
+    "POST /api/frame/explain": async (s, _q, body) => {
+      const w = await load(s, false);
+      const path = typeof body.path === "string" ? body.path : "";
+      const { target } = pickTarget(w.index, { path, line: Number(body.line) || 0 });
+      if (!target) throw new HttpError(404, "That code isn't in the index any more. Rescan and try again.");
+      if (typeof body.apiKey === "string" && body.apiKey.trim()) s.askKey = body.apiKey.trim();
+      if (!s.askKey && (hosted || (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN))) throw new HttpError(400, hosted ? "Paste your Anthropic API key." : "Paste an Anthropic API key, or start Spelunk with ANTHROPIC_API_KEY set.");
+      const f = frame(w.index, w.graph, target, await sourceOf(w, target.path));
+      if (!f) throw new HttpError(404, "Nothing to explain there.");
+      try {
+        return await captionFrame(new Claude(join(w.index.root, ".spelunk", "cache"), s.askKey), f);
+      } catch (err) {
+        throw new HttpError(400, err instanceof Error ? err.message : String(err));
+      }
+    },
+
+    // Go to definition from the code drawer.
+    "GET /api/def": async (s, q) => {
+      const w = await load(s, false);
+      const d = definition(w.index, w.graph, q.get("path") ?? "", q.get("ref") ?? "");
+      return d ? { path: d.path, line: d.symbol.line, name: d.symbol.name, byName: Boolean(d.byName) } : { path: null };
+    },
+
+    // The map, filtered to some areas and without the smallest parts.
+    "GET /api/diagram": async (s, q) => {
+      const r = await getReport(s);
+      const areas = (q.get("areas") ?? "").split(",").filter(Boolean);
+      const small = Number(q.get("small")) || 0;
+      const mods = r.modules.filter((m) => (!areas.length || areas.includes(areaOf(m))) && m.files.length >= small);
+      const braid = s.root ? await braidState(s.root) : undefined;
+      return { svg: diagramSvg(mods, braid && agentMarks(agentsOnMap(braid, r))), shown: mods.length, total: r.modules.length };
+    },
+
+    "GET /api/focus": async (s, q) => {
+      const w = await load(s, false);
+      const r = await getReport(s);
+      const f = focus(r.modules, w.graph, q.get("module") ?? "");
+      if (!f) throw new HttpError(404, "That part isn't on the map any more. Rescan and try again.");
+      return f;
+    },
+
     "GET /api/file": async (s, q) => {
       const w = await load(s, false);
       const path = q.get("path") ?? "";
@@ -397,10 +457,16 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
       const f = w.index.files.find((x) => x.path === path);
       if (!f) throw new HttpError(404, `No file "${path}" in this repository.`);
       // The index can be older than the disk: a file swapped for a symlink since would otherwise be followed.
-      const abs = join(w.index.root, f.path);
-      const text = (await within(w.index.root, abs)) ? await readFile(abs, "utf8").catch(() => "") : "";
+      const text = await sourceOf(w, f.path);
+      // Calls that land in this repository, so the drawer can make just those clickable (go to definition).
+      const defs: Record<string, [string, number]> = {};
+      for (const ref of new Set(f.callSites.slice(0, 6000).map(([r]) => r))) {
+        const d = definition(w.index, w.graph, f.path, ref);
+        if (d) defs[ref] = [d.path, d.symbol.line];
+      }
       return {
         facts: f,
+        defs,
         importedBy: [...(w.graph.in.get(f.path) ?? [])].sort(),
         imports: [...(w.graph.out.get(f.path) ?? [])].sort(),
         source: text.length > MAX_SOURCE ? `${text.slice(0, MAX_SOURCE)}\n… (truncated)` : text,

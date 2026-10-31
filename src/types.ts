@@ -131,4 +131,4 @@ export interface Index {
   only?: string[];
 }
 
-export const INDEX_VERSION = 6;
+export const INDEX_VERSION = 7;

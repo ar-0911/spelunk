@@ -261,7 +261,7 @@ const BUILTINS = new Set([
 ]);
 
 /** True when the call's root name is bound by an import of an installed package, or is a runtime global. */
-function libraryCall(index: Index, g: Graph, from: string, ref: string): boolean {
+export function libraryCall(index: Index, g: Graph, from: string, ref: string): boolean {
   const here = g.files.get(from) ?? index.files.find((f) => f.path === from);
   const head = ref.split(".")[0]!;
   if (BUILTINS.has(head)) return true;
@@ -298,23 +298,37 @@ function callTree(index: Index, g: Graph, from: string, refs: string[], depth: n
  * - a decorated function just below the route line (Flask, FastAPI, Spring);
  * - otherwise, the lines up to the next route or the end of the enclosing function.
  */
-function routeCalls(index: Index, r: RouteAt): string[] {
+/** The lines a route's handler covers, and the handler named in the registration, if any. */
+export function routeRange(index: Index, r: RouteAt): { from: number; to: number } | undefined {
   const f = index.files.find((x) => x.path === r.file);
-  if (!f) return [];
-  const refs = (a: number, b: number) => f.callSites.filter(([, line]) => line >= a && line <= b).map(([ref]) => ref);
+  if (!f) return undefined;
   const span = (f.spans ?? []).filter(([a, b]) => a <= r.line && b >= r.line).sort((x, y) => x[1] - x[0] - (y[1] - y[0]))[0];
   const enclosing = f.symbols.filter((s) => s.line <= r.line && s.endLine > r.line).sort((a, b) => a.endLine - b.endLine)[0];
   // A route written as a decorator or annotation (`@router.post("/")`) sits just above its function.
   const decorated = span ? undefined : f.symbols.find((s) => (s.kind === "function" || s.kind === "method") && s.line > r.line && s.line <= r.line + 6 && !(enclosing && enclosing.endLine < s.line));
-  let out: string[];
-  if (span) out = refs(span[0], span[1]);
-  else if (decorated) out = refs(decorated.line, decorated.endLine);
-  else {
-    const later = f.routes.filter((x) => x.side === "server" && x.line > r.line).map((x) => x.line);
-    out = refs(r.line, Math.min(later.length ? Math.min(...later) - 1 : Infinity, enclosing?.endLine ?? Infinity, r.line + 30));
-  }
-  // The handler the route detector named (`app.get("/x", getUser)`), in case its line wasn't a parsed call.
-  if (r.handler) out.unshift(/^(svc|evt):/.test(r.handler) ? r.handler : r.handler.split(".").slice(-2).join("."));
+  if (span) return { from: span[0], to: span[1] };
+  if (decorated) return { from: decorated.line, to: decorated.endLine };
+  const later = f.routes.filter((x) => x.side === "server" && x.line > r.line).map((x) => x.line);
+  return { from: r.line, to: Math.min(later.length ? Math.min(...later) - 1 : Infinity, enclosing?.endLine ?? Infinity, r.line + 30) };
+}
+
+/** The handler the route detector named (`app.get("/x", getUser)`), as a call reference. */
+export const routeHandlerRef = (r: RouteAt) => (r.handler ? (/^(svc|evt):/.test(r.handler) ? r.handler : r.handler.split(".").slice(-2).join(".")) : undefined);
+
+/**
+ * What a route's handler calls. Three shapes, most specific first:
+ * - the registration call itself (`app.get("/x", auth, (req, res) => …)`), whose span
+ *   holds inline code and the names of handlers passed by reference;
+ * - a decorated function just below the route line (Flask, FastAPI, Spring);
+ * - otherwise, the lines up to the next route or the end of the enclosing function.
+ */
+function routeCalls(index: Index, r: RouteAt): string[] {
+  const f = index.files.find((x) => x.path === r.file);
+  const range = routeRange(index, r);
+  if (!f || !range) return [];
+  const out = f.callSites.filter(([, line]) => line >= range.from && line <= range.to).map(([ref]) => ref);
+  const handler = routeHandlerRef(r);
+  if (handler) out.unshift(handler);
   return [...new Set(out)];
 }
 
