@@ -2,6 +2,13 @@
 
 Understand any codebase: where code lives, how it's written, and how the pieces connect. Built for the moment you open a large or vibe-coded repo and something is broken.
 
+<a href="https://docs.adityapoc.xyz/r/ar-0911/spelunk">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://docs.adityapoc.xyz/r/ar-0911/spelunk/card.svg?theme=dark">
+    <img alt="ar-0911/spelunk, explained on Elemnt" src="https://docs.adityapoc.xyz/r/ar-0911/spelunk/card.svg">
+  </picture>
+</a>
+
 Spelunk reads the repository with [tree-sitter](https://tree-sitter.github.io/) to build a map of files, symbols, imports, HTTP routes, environment variables and commands. That part is fast, offline and free. On top of it, Claude can write the parts static analysis can't: what each module is for, how the main flows work, and where to look when something fails.
 
 You use it from the terminal, or let Claude Code (or any MCP client) ask it questions while it works.
