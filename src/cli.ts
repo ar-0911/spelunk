@@ -364,6 +364,15 @@ async function main(argv: string[]): Promise<number> {
         log: (m) => process.stderr.write(`${m}\n`),
       });
       process.stdout.write(`Spelunk is serving on ${ui.url}\n`);
+      // In a container Node is PID 1, and PID 1 ignores SIGTERM unless it handles it. Without this, a deploy
+      // (Cloudflare, Docker, Fly) waits out its kill timeout, up to 15 minutes, before the new version runs.
+      const stop = (signal: string) => {
+        process.stderr.write(`${signal}: shutting down\n`);
+        setTimeout(() => process.exit(0), 3_000).unref();
+        void ui.close().then(() => process.exit(0));
+      };
+      process.once("SIGTERM", () => stop("SIGTERM"));
+      process.once("SIGINT", () => stop("SIGINT"));
       return -1;
     }
     case "setup": {
