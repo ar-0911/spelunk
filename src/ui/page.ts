@@ -92,7 +92,7 @@ ol.steps { padding-left: 20px; } ol.steps li { margin-bottom: 6px; }
 .spinner { display: inline-block; width: 14px; height: 14px; border: 2px solid var(--line-strong); border-top-color: var(--accent); border-radius: 50%; animation: spin .8s linear infinite; vertical-align: -2px; }
 @keyframes spin { to { transform: rotate(360deg); } }
 /* File drawer */
-.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(760px, 100%); background: var(--panel); border-left: 1px solid var(--line-strong); box-shadow: -12px 0 32px rgba(0,0,0,.18); display: grid; grid-template-rows: auto auto 1fr; z-index: 20; transform: translateX(102%); visibility: hidden; transition: transform .18s ease, visibility 0s linear .18s; }
+.drawer { position: fixed; top: 0; right: 0; bottom: 0; width: min(760px, 100%); background: var(--panel); border-left: 1px solid var(--line-strong); box-shadow: -12px 0 32px rgba(0,0,0,.18); display: grid; grid-template-rows: auto auto auto 1fr; z-index: 20; transform: translateX(102%); visibility: hidden; transition: transform .18s ease, visibility 0s linear .18s; }
 .drawer.open { transform: none; visibility: visible; transition: transform .18s ease; }
 .drawer .dh { display: flex; gap: 10px; align-items: flex-start; padding: 12px 16px; border-bottom: 1px solid var(--line); }
 .drawer .dh .t { flex: 1; min-width: 0; }
@@ -152,6 +152,77 @@ details.sec[open] > summary { margin-bottom: 8px; }
 .orline { display: flex; align-items: center; gap: 10px; color: var(--muted); font-size: 12.5px; margin-top: 6px; }
 .orline::before, .orline::after { content: ""; flex: 1; border-top: 1px solid var(--line); }
 label { font-size: 13px; color: var(--muted); }
+/* Trace reader */
+.view.wide { max-width: 1320px; }
+.trail { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; font-size: 13px; margin: 6px 0 4px; }
+.trail .lnk { font-size: 12.5px; }
+.trail .btn { margin-left: 8px; padding: 3px 10px; font-size: 12.5px; }
+.fhead { display: flex; gap: 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.fsum { margin: 8px 0 0; font-size: 15px; max-width: 80ch; }
+.lane { font: 500 11px/1.2 var(--mono); letter-spacing: .06em; text-transform: uppercase; color: var(--muted); margin-bottom: 8px; }
+.gethere { margin: 14px 0; }
+.flowrow { display: flex; flex-wrap: wrap; gap: 6px 8px; align-items: center; }
+.flowrow .arrow, .entry .arrow { color: var(--muted); }
+.flowrow details.more { flex-basis: 100%; font-size: 13px; } .flowrow details.more .pill2 { margin: 4px 4px 0 0; }
+.pill2 { border: 1px solid var(--line-strong); background: var(--code-bg); border-radius: 999px; padding: 3px 11px; font: 12.5px var(--mono); cursor: pointer; color: var(--ink); }
+.pill2:hover { border-color: var(--accent); }
+.pill2.on { background: var(--accent-soft); border-color: var(--accent); color: var(--accent-ink); cursor: default; font-weight: 600; }
+.pill2 .tag { padding: 2px 5px; font-size: 10px; }
+.entry { font-size: 12.5px; margin-top: 8px; }
+.reader { display: grid; grid-template-columns: minmax(280px, 380px) minmax(0, 1fr); gap: 14px; align-items: start; }
+.steps2 { padding: 12px 10px; position: sticky; top: 0; max-height: calc(100vh - 120px); overflow-y: auto; }
+.tstep2 { display: flex; gap: 10px; align-items: flex-start; width: 100%; text-align: left; background: none; border: 1px solid transparent; border-radius: 8px; padding: 7px 8px; cursor: pointer; color: inherit; font: inherit; }
+.tstep2:hover { background: var(--code-bg); }
+.tstep2.sel { background: var(--accent-soft); border-color: color-mix(in srgb, var(--accent) 45%, transparent); }
+.tstep2:not([data-into]) { cursor: default; }
+.tstep2 .tn { flex: none; width: 22px; height: 22px; border-radius: 50%; background: var(--accent); color: var(--bg); font: 600 11px/22px var(--mono); text-align: center; margin-top: 1px; }
+.tstep2 .tn.o { background: none; border: 1px solid var(--line-strong); color: var(--muted); line-height: 20px; }
+.tstep2.small { padding: 4px 8px; } .tstep2.small .nm { font-weight: 500; }
+.tstep2 .tb { display: flex; flex-direction: column; min-width: 0; }
+.tstep2 .hd { display: flex; flex-wrap: wrap; gap: 4px 6px; align-items: baseline; }
+.tstep2 .nm { font: 600 13px var(--mono); overflow-wrap: anywhere; }
+.tstep2 .what { font-size: 13px; color: var(--ink); margin-top: 1px; }
+.tstep2 .where { font: 11.5px var(--mono); color: var(--muted); margin-top: 2px; }
+.badge { font: 500 10.5px var(--mono); padding: 1px 6px; border-radius: 9px; background: var(--medium-soft); color: var(--medium); white-space: nowrap; }
+.tog { display: block; margin: 10px 8px 4px; font-family: var(--body); font-size: 12.5px; }
+.keys { font-size: 11.5px; margin: 12px 8px 0; } kbd { font: 11px var(--mono); border: 1px solid var(--line-strong); border-radius: 4px; padding: 0 4px; background: var(--code-bg); }
+.codecard { padding: 0; overflow: hidden; }
+.codehead { display: flex; justify-content: space-between; gap: 10px; padding: 8px 12px; border-bottom: 1px solid var(--line); font-size: 12px; }
+.codecard .code { overflow-x: auto; max-height: calc(100vh - 140px); }
+.code .call { background: color-mix(in srgb, var(--accent) 14%, transparent); border-bottom: 2px solid var(--accent); border-radius: 3px; cursor: pointer; }
+.code .call.dim { background: none; border-bottom: 1px dotted var(--line-strong); cursor: default; }
+.code .call.sel { background: color-mix(in srgb, var(--accent) 35%, transparent); }
+.code .mk { color: var(--accent-ink); margin: 0 2px 0 1px; cursor: pointer; font-weight: 600; font-size: 11px; vertical-align: super; }
+.code .mk.sel { background: var(--accent); color: var(--bg); border-radius: 50%; padding: 0 2px; }
+.code .l.cur { background: var(--accent-soft); }
+.code .l.thr > i { color: var(--high); opacity: 1; font-weight: 600; }
+.code .l.thr > i::before { content: "!"; margin-right: 4px; }
+.code .cref { border-bottom: 1px dotted var(--accent); cursor: pointer; }
+.code .cref:hover { background: var(--accent-soft); }
+.drawer .dnav { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 6px 16px; border-bottom: 1px solid var(--line); }
+.drawer .dnav:empty { display: none; }
+.drawer .dnav .btn { padding: 3px 10px; font-size: 12.5px; }
+.choices { display: grid; gap: 8px; max-width: 760px; }
+/* Map */
+.seg { display: inline-flex; gap: 0; } .seg .chip:first-child { border-radius: 999px 0 0 999px; } .seg .chip:last-child { border-radius: 0 999px 999px 0; margin-left: -1px; }
+.maptools { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0 10px; }
+#mapfig svg .sp-edge, #mapfig svg .sp-node { transition: opacity .12s; }
+#mapfig svg.hov .sp-edge:not(.on) { opacity: .12; }
+#mapfig svg.hov .sp-node:not(.on) { opacity: .3; }
+#mapfig svg.hov .sp-edge.on { stroke: var(--accent); }
+.focusgrid { display: grid; grid-template-columns: minmax(0, 1fr) 300px; gap: 14px; align-items: start; margin-top: 12px; }
+.fx svg { min-width: 640px; }
+.fx svg text { fill: var(--ink); } .fx svg text.sub, .fx svg .sub { fill: var(--muted); }
+.fx svg .lane2 { font: 500 11px var(--mono); letter-spacing: .06em; fill: var(--muted); }
+.fx-node { cursor: pointer; } .fx-node rect { fill: var(--panel); stroke: var(--line-strong); } .fx-node:hover rect, .fx-node:focus rect { stroke: var(--accent); stroke-width: 2; outline: none; }
+.fx-node rect.cyc { stroke: var(--medium); stroke-dasharray: 5 3; }
+.fx-me rect { fill: var(--accent); } .fx-me text { fill: var(--bg) !important; }
+.fx-edge { cursor: pointer; } .fx-edge path { fill: none; stroke: color-mix(in srgb, var(--accent) 55%, var(--line-strong)); } .fx-edge path.hit { stroke: transparent; stroke-width: 14; }
+.fx-edge text { fill: var(--accent-ink) !important; font-family: var(--mono); }
+.fx-edge:hover path:not(.hit), .fx-edge.on path:not(.hit) { stroke: var(--accent); }
+.fside { font-size: 13.5px; position: sticky; top: 0; }
+.fside .pair { font-size: 12.5px; margin: 0 0 10px; line-height: 1.7; } .fside .pair .arrow { color: var(--muted); }
+@media (max-width: 1000px) { .reader, .focusgrid { grid-template-columns: minmax(0, 1fr); } .steps2 { position: static; max-height: none; } }
 @media (max-width: 820px) {
   .body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr; }
   nav.side { border-right: 0; border-bottom: 1px solid var(--line); display: flex; overflow-x: auto; padding: 6px 10px; gap: 2px; }
@@ -290,6 +361,99 @@ function renderTop() {
   $("#actions").innerHTML = state.root ? (state.hosted ? "" : '<button class="btn" id="rescan" title="Read the folder again after changes">Rescan</button>') + '<a class="btn" target="_blank" rel="noopener" href="/guide">Field guide ↗</a>' : "";
 }
 
+// ---------- The map: filters, hover to light up links, click to focus one part
+let mapAreas = [], mapSmall = null, mapMode = null;
+function mapToolbar() {
+  const areas = report.areas || [];
+  if (mapSmall === null) mapSmall = report.modules.length > 14;
+  if (mapMode === null) mapMode = report.services ? "services" : "folders";
+  const modes = report.services ? '<span class="seg"><button class="chip" data-mapmode="services" aria-pressed="' + (mapMode === "services") + '" title="One box per service; arrows are ctx.call and events">Services (' + report.services + ')</button><button class="chip" data-mapmode="folders" aria-pressed="' + (mapMode === "folders") + '" title="One box per folder; arrows are imports">Folders</button></span>' : "";
+  return '<div class="maptools">' + modes + (mapMode === "services" ? '<span class="muted" style="font-size:12.5px">Arrows are broker calls (ctx.call) and events between services.</span>' : "") + (areas.length > 1 && mapMode === "folders" ? '<button class="chip" data-area="" aria-pressed="' + !mapAreas.length + '">Everything</button>' + areas.map((a) => '<button class="chip" data-area="' + esc(a.name) + '" aria-pressed="' + mapAreas.includes(a.name) + '">' + esc(a.name) + ' <span class="muted">' + a.count + "</span></button>").join("") : "") +
+    (mapMode === "folders" ? '<label class="tick" style="margin:0 0 0 auto"><input type="checkbox" id="mapsmall"' + (mapSmall ? " checked" : "") + "> Hide parts with fewer than 3 files</label>" : "") + "</div>";
+}
+async function redrawMap() {
+  const fig = $("#mapfig"); if (!fig) return;
+  const r = await api("/api/diagram?mode=" + mapMode + "&areas=" + encodeURIComponent(mapAreas.join(",")) + "&small=" + (mapSmall ? 3 : 0));
+  fig.innerHTML = r.svg || '<p class="muted">No parts match.</p>';
+  $("#mapcount").textContent = r.shown < r.total ? "Showing " + r.shown + " of " + r.total + " parts." : "";
+}
+function wireMap() {
+  const fig = $("#mapfig"); if (!fig) return;
+  if (mapAreas.length || mapSmall || mapMode === "services") redrawMap();
+  fig.addEventListener("mouseover", (e) => {
+    const n = e.target.closest(".sp-node"); const svg = fig.querySelector("svg"); if (!svg) return;
+    if (!n) { svg.classList.remove("hov"); return; }
+    const p = n.dataset.mod, near = new Set([p]);
+    svg.querySelectorAll(".sp-edge").forEach((x) => { const on = x.dataset.from === p || x.dataset.to === p; x.classList.toggle("on", on); if (on) { near.add(x.dataset.from); near.add(x.dataset.to); } });
+    svg.querySelectorAll(".sp-node").forEach((x) => x.classList.toggle("on", near.has(x.dataset.mod)));
+    svg.classList.add("hov");
+  });
+  fig.addEventListener("mouseleave", () => { const svg = fig.querySelector("svg"); if (svg) svg.classList.remove("hov"); });
+  const sm = $("#mapsmall"); if (sm) sm.addEventListener("change", (e) => { mapSmall = e.target.checked; redrawMap(); });
+}
+let focusLink = null;
+async function vFocus(path) {
+  view = "overview"; renderNav();
+  $("#main").innerHTML = '<div class="view wide empty"><span class="spinner"></span></div>';
+  const f = await api("/api/focus?mode=" + (mapMode || "folders") + "&module=" + encodeURIComponent(path));
+  focusLink = null;
+  const name = (p) => p || "(root)";
+  const W = 960, bw = 240, bh = 58, gap = 14, colX = [10, (W - bw) / 2, W - bw - 10];
+  const MAXN = 8;
+  const left = f.usedBy.slice(0, MAXN), right = f.uses.slice(0, MAXN);
+  const rows = Math.max(left.length, right.length, 1);
+  const H = Math.max(rows * (bh + gap) + 40, 180);
+  const cy = H / 2 + 12;
+  const maxW = Math.max(1, ...f.usedBy.concat(f.uses).map((x) => x.weight));
+  const thick = (w) => (1.2 + 5 * Math.sqrt(w / maxW)).toFixed(1);
+  const colY = (n, i) => 30 + (H - 30 - n * (bh + gap)) / 2 + i * (bh + gap);
+  const box = (x, y, l, dir) => { const cyc = f.cycles.includes(l.path); return '<g class="fx-node" data-focus="' + esc(l.path) + '" tabindex="0"><rect x="' + x + '" y="' + y + '" width="' + bw + '" height="' + bh + '" rx="8"' + (cyc ? ' class="cyc"' : "") + '/><text x="' + (x + 12) + '" y="' + (y + 22) + '" font-size="13" font-weight="600">' + esc(trunc(name(l.path), 30)) + '</text><text x="' + (x + 12) + '" y="' + (y + 41) + '" font-size="11.5" class="sub">' + esc(trunc(l.about || l.fileCount + " files", 36)) + "</text><title>" + esc(name(l.path)) + (cyc ? " (they import each other: a cycle)" : "") + "</title></g>"; };
+  const edge = (x1, y1, x2, y2, l, dir) => { const mx = (x1 + x2) / 2; return '<g class="fx-edge" data-link="' + dir + ":" + esc(l.path) + '"><path d="M' + x1 + "," + y1 + " C" + mx + "," + y1 + " " + mx + "," + y2 + " " + (x2 - 6) + "," + y2 + '" stroke-width="' + thick(l.weight) + '" marker-end="url(#fx-arrow)"/><path class="hit" d="M' + x1 + "," + y1 + " C" + mx + "," + y1 + " " + mx + "," + y2 + " " + (x2 - 6) + "," + y2 + '"/><text x="' + mx + '" y="' + ((y1 + y2) / 2 - 6) + '" font-size="11" text-anchor="middle">' + l.weight + "</text><title>" + l.weight + " import" + (l.weight === 1 ? "" : "s") + ". Click to see which files.</title></g>"; };
+  let svg = '<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="What uses ' + esc(name(f.path)) + ' and what it uses"><defs><marker id="fx-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="10" markerHeight="10" orient="auto"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker></defs>' +
+    '<text x="' + (colX[0] + 4) + '" y="16" class="lane2">USES ' + esc(trunc(name(f.path).split("/").pop(), 20).toUpperCase()) + " (" + f.usedBy.length + ')</text><text x="' + (colX[2] + 4) + '" y="16" class="lane2">' + esc(trunc(name(f.path).split("/").pop(), 20).toUpperCase()) + " USES (" + f.uses.length + ")</text>";
+  left.forEach((l, i) => { const y = colY(left.length, i); svg += edge(colX[0] + bw, y + bh / 2, colX[1], cy, l, "in"); });
+  right.forEach((l, i) => { const y = colY(right.length, i); svg += edge(colX[1] + bw, cy, colX[2], y + bh / 2, l, "out"); });
+  left.forEach((l, i) => { svg += box(colX[0], colY(left.length, i), l, "in"); });
+  right.forEach((l, i) => { svg += box(colX[2], colY(right.length, i), l, "out"); });
+  svg += '<g class="fx-me"><rect x="' + colX[1] + '" y="' + (cy - 40) + '" width="' + bw + '" height="80" rx="10"/><text x="' + (colX[1] + 14) + '" y="' + (cy - 12) + '" font-size="14" font-weight="600">' + esc(trunc(name(f.path), 28)) + '</text><text x="' + (colX[1] + 14) + '" y="' + (cy + 8) + '" font-size="11.5">' + f.fileCount + " files · " + fmt(f.lines) + ' lines</text><text x="' + (colX[1] + 14) + '" y="' + (cy + 26) + '" font-size="11.5">' + esc(trunc(f.about || "", 34)) + "</text></g>";
+  if (!left.length) svg += '<text x="' + (colX[0] + bw / 2) + '" y="' + cy + '" text-anchor="middle" font-size="12" class="sub">Nothing else imports it</text>';
+  if (!right.length) svg += '<text x="' + (colX[2] + bw / 2) + '" y="' + cy + '" text-anchor="middle" font-size="12" class="sub">It imports nothing else here</text>';
+  svg += "</svg>";
+  const extra = (list, n) => (list.length > n ? '<p class="muted" style="font-size:12.5px">+ ' + (list.length - n) + " more: " + list.slice(n).map((l) => '<button class="lnk" data-focus="' + esc(l.path) + '">' + esc(name(l.path)) + "</button>").join(", ") + "</p>" : "");
+  $("#main").innerHTML = '<div class="view wide"><button class="lnk" data-view="overview">← All parts</button><h1 class="mono" style="font-size:24px;margin-top:10px">' + esc(name(f.path)) + "</h1>" + (f.about ? '<p class="lede">' + prose(f.about) + "</p>" : "") +
+    '<p class="muted" style="font-size:13px">'+(mapMode === "services" ? "Only this service and the services it talks to. Thicker arrows mean more calls." : "Only this part and its neighbours. Thicker arrows mean more files import across that link.")+'  Click a box to move the focus there, or an arrow to see the files behind it.</p>' +
+    '<div class="focusgrid"><div class="figure fx">' + svg + extra(f.usedBy, MAXN) + extra(f.uses, MAXN) + '</div><div class="card fside" id="fside"></div></div></div>';
+  const side = () => {
+    let h = "";
+    if (focusLink) {
+      const [dir, p] = [focusLink.slice(0, focusLink.indexOf(":")), focusLink.slice(focusLink.indexOf(":") + 1)];
+      const l = (dir === "in" ? f.usedBy : f.uses).find((x) => x.path === p);
+      if (l) h += '<button class="lnk" id="fsideback">← About this part</button><h3 style="margin-top:8px">' + esc(dir === "in" ? name(p) + " → " + name(f.path) : name(f.path) + " → " + name(p)) + '</h3><p class="muted" style="font-size:12.5px">' + l.weight + (mapMode === "services" ? " call" : " import") + (l.weight === 1 ? "" : "s") + ":</p>" + groupPairs(l.files) + (l.weight > l.files.length ? '<p class="muted">…and ' + (l.weight - l.files.length) + " more</p>" : "") + '<p style="margin-top:10px"><button class="btn" data-focus="' + esc(p) + '">Focus on ' + esc(trunc(name(p), 24)) + "</button></p>";
+    }
+    if (!h) {
+      h = "<h3 style=\"margin-top:0\">" + (mapMode === "services" ? "Where it lives" : "Read first") + "</h3>" + f.readFirst.map((x) => '<div style="margin-bottom:6px">' + loc(x.path, 0, x.path.split("/").pop()) + ' <span class="muted" style="font-size:12px">imported by ' + x.usedBy + "</span>" + (x.doc ? '<div class="muted" style="font-size:12.5px">' + esc(firstSentence(x.doc)) + "</div>" : "") + "</div>").join("") +
+        (f.cycles.length ? '<h3>Cycles</h3><p style="font-size:13px">It and ' + f.cycles.map((c) => "<b>" + esc(name(c)) + "</b>").join(", ") + " import each other, so a change on either side can ripple back.</p>" : "") +
+        (mapMode === "services" ? "" : '<p style="margin-top:12px"><button class="btn" data-module="' + esc(f.path) + '">See all its files</button></p>');
+    }
+    $("#fside").innerHTML = h;
+    const b = $("#fsideback"); if (b) b.addEventListener("click", () => { focusLink = null; side(); });
+    document.querySelectorAll(".fx-edge").forEach((e) => e.classList.toggle("on", e.dataset.link === focusLink));
+  };
+  side();
+  $(".fx svg").addEventListener("click", (e) => {
+    const n = e.target.closest(".fx-node"); if (n) return vFocus(n.dataset.focus);
+    const ed = e.target.closest(".fx-edge"); if (ed) { focusLink = ed.dataset.link; side(); }
+  });
+  $(".fx svg").addEventListener("keydown", (e) => { const n = e.target.closest(".fx-node"); if (n && e.key === "Enter") vFocus(n.dataset.focus); });
+}
+// "schema.ts, imported by accounts.ts, ask.ts, …": one line per imported file reads faster than one per pair.
+function groupPairs(files) {
+  const by = new Map();
+  for (const [a, b] of files) (by.get(b) || by.set(b, []).get(b)).push(a);
+  return [...by].map(([b, as]) => '<div class="pair">' + (b.includes("/") ? loc(b, 0, b.split("/").slice(-2).join("/")) : "<code>" + esc(b) + "</code>") + ' <span class="muted">' + (b.includes("/") ? "used by " : "called from ") + as.length + ":</span> " + as.slice(0, 12).map((a) => { const m = /^(.*):(\d+)$/.exec(a); return m ? loc(m[1], Number(m[2]), m[1].split("/").pop() + ":" + m[2]) : loc(a, 0, a.split("/").pop()); }).join(", ") + (as.length > 12 ? " …" : "") + "</div>").join("");
+}
+const trunc = (s, n) => (s.length > n ? s.slice(0, n - 1) + "…" : s);
+
 // ---------- Overview
 function vOverview() {
   const r = report, o = r.overview;
@@ -307,13 +471,14 @@ function vOverview() {
     '<div class="card"><h4>Where the program starts</h4>' + (r.entries.length ? r.entries.map((e) => "<div>" + loc(e.path) + ' <span class="tag">' + esc(e.label) + "</span></div>").join("") : '<p class="muted">No entry point found.</p>') + "</div>" +
     '<div class="card"><h4>Read these first</h4><p class="muted" style="font-size:12.5px">Big files that change often. Most bugs live here.</p>' + (hot.length ? hot.map((x) => "<div>" + loc(x.locations[0].path) + "</div>").join("") : '<p class="muted">No git history to rank by.</p>') + "</div>" +
     '<div class="card"><h4>How to run it</h4>' + (o && o.runLocally.length ? '<ol class="steps" style="margin:0;font-size:13px">' + o.runLocally.map((s) => "<li>" + prose(s) + "</li>").join("") + "</ol>" : cmds.length ? cmds.map((c) => '<div style="margin-bottom:6px"><code>' + esc(c.name) + '</code><div class="muted mono" style="font-size:11.5px;overflow-wrap:anywhere">' + esc(c.command.slice(0, 70)) + "</div></div>").join("") : '<p class="muted">No commands found.</p>') + "</div></div>";
-  h += '<h2>How the parts connect</h2><p class="muted">Each box is a folder of code. Arrows point to the folders it uses. Click a box to see what is inside.</p><div class="figure">' + r.diagram + "</div>";
+  h += '<h2>How the parts connect</h2><p class="muted">Each box is a folder of code; arrows point to the folders it uses, thicker when more files do. Point at a box to light up its links, click it to see just that part and its neighbours.</p>' + mapToolbar() + '<div class="figure" id="mapfig">' + r.diagram + '</div><p class="muted" id="mapcount" style="font-size:12.5px;margin-top:6px"></p>';
   h += '<h2>The parts</h2><div class="cards">' + r.modules.map((m) => {
     const e = m.explanation, doc = e ? e.summary : (m.files.find((f) => f.doc) || {}).doc;
     return '<button class="card click" data-module="' + esc(m.path) + '"><h4 class="mono" style="font-size:13px">' + esc(m.path || "(root)") + '</h4><p class="muted" style="font-size:12.5px;margin-bottom:6px">' + m.files.length + " files · " + fmt(m.lines) + " lines</p>" + (doc ? '<p style="font-size:13px;margin:0">' + prose(doc.length > 220 ? doc.slice(0, 220) + "…" : doc) + "</p>" : "") + "</button>";
   }).join("") + "</div>";
   if (o && o.glossary.length) h += '<h2>Words this project uses</h2><div class="tw"><table>' + o.glossary.map((g) => "<tr><td><b>" + esc(g.term) + "</b></td><td>" + prose(g.meaning) + "</td></tr>").join("") + "</table></div>";
   $("#main").innerHTML = h + "</div>";
+  wireMap();
 }
 
 function vModule(path) {
@@ -356,15 +521,136 @@ async function search(q) {
     (h.kind === "symbol" || h.kind === "route" ? ' · ' + traceBtn(h.kind === "route" ? h.name : h.name, "trace") : "") + '</div><div class="why">' + esc(h.why) + "</div></div></div>").join("") : '<p class="empty">Nothing matches' + (findKind ? " in " + FIND_KINDS.find(([k]) => k === findKind)[1].toLowerCase() + '. <button class="lnk" data-findkind-all>Search everything</button>' : ". Try other words, or a name you saw on screen or in an error.") + "</p>";
 }
 
-// ---------- Trace
+// ---------- Trace: a reader you step through, one function at a time
+let tstack = [], captions = {}, autoCaption = false, tsel = 0, tframe = null, showHelpers = false, showOther = false;
 function vTrace(target) {
   const ex = report.routes.slice(0, 4).map((r) => r.method + " " + r.path).concat(report.entries.slice(0, 2).map((e) => e.path));
-  $("#main").innerHTML = '<div class="view"><h1>Trace</h1><p class="lede">Follow how the code connects. Enter a web address the app serves, a function name or a file, and see what calls it and what it calls.</p>' +
+  $("#main").innerHTML = '<div class="view wide"><h1>Trace</h1><p class="lede">Read how the code runs, one function at a time. Start from a web address the app serves or a function name; click a numbered call to step into it, and use the trail at the top to step back.</p>' +
     '<form class="searchrow" id="tf"><input class="field" id="tq" placeholder="e.g. POST /api/login, saveUser, src/server.ts" autocomplete="off" aria-label="What to trace"><button class="btn primary">Trace</button></form>' +
     '<div class="chips">' + ex.map((x) => '<button class="chip" data-trace="' + esc(x) + '">' + esc(x) + "</button>").join("") + '</div><div id="tr"></div></div>';
-  $("#tf").addEventListener("submit", (e) => { e.preventDefault(); runTrace($("#tq").value); });
-  if (target) { $("#tq").value = target; runTrace(target); }
+  $("#tf").addEventListener("submit", (e) => { e.preventDefault(); startTrace($("#tq").value); });
+  if (target) { $("#tq").value = target; startTrace(target); }
+  else if (tstack.length) loadFrame(tstack[tstack.length - 1]);
 }
+async function startTrace(target) {
+  if (!target.trim()) return;
+  $("#tr").innerHTML = '<p class="muted"><span class="spinner"></span> Tracing…</p>';
+  const r = await api("/api/frame?target=" + encodeURIComponent(target));
+  if (r.frame) { tstack = [{ path: r.frame.path, line: r.frame.line, label: r.frame.label }]; return showFrame(r.frame, r.choices); }
+  if (r.choices.length) {
+    $("#tr").innerHTML = '<p class="summary">"' + esc(target) + '" matches ' + r.choices.length + ' things. Which one?</p><div class="choices">' + r.choices.map((c) => '<button class="card click" data-frame="' + esc(c.path) + '" data-fline="' + (c.line || "") + '" data-flabel="' + esc(c.label) + '"><b class="mono" style="font-size:13px">' + esc(c.label) + '</b> <span class="tag">' + esc(c.kind === "route" ? "route" : "function") + '</span><div class="muted mono" style="font-size:12px">' + esc(c.path) + ":" + (c.line || "") + "</div>" + (c.doc ? '<div style="font-size:13px;margin-top:4px">' + esc(c.doc.slice(0, 160)) + "</div>" : "") + "</button>").join("") + "</div>";
+    return;
+  }
+  return runTrace(target); // files, and the "nothing found" message
+}
+async function loadFrame(at) {
+  $("#tr").innerHTML = '<p class="muted"><span class="spinner"></span> Opening ' + esc(at.label || at.path) + "…</p>";
+  const r = await api("/api/frame?path=" + encodeURIComponent(at.path) + "&line=" + at.line);
+  if (!r.frame) { $("#tr").innerHTML = '<p class="empty">Spelunk couldn’t open that code. ' + loc(at.path, at.line) + "</p>"; return; }
+  showFrame(r.frame, []);
+}
+function stepInto(path, line, label) {
+  tstack.push({ path, line, label });
+  showHelpers = false; showOther = false;
+  if (view !== "trace") { view = "trace"; renderNav(); closeFile(); vTrace(); return; }
+  loadFrame(tstack[tstack.length - 1]);
+}
+function stepBack(i) {
+  if (tstack.length < 2 && i === undefined) return;
+  tstack = tstack.slice(0, i === undefined ? tstack.length - 1 : i + 1);
+  loadFrame(tstack[tstack.length - 1]);
+}
+const firstSentence = (s) => { const m = /^(.{0,140}?[.!?])(\s|$)/.exec(s || ""); return m ? m[1] : (s || "").slice(0, 140); };
+const NUMS = "①②③④⑤⑥⑦⑧⑨⑩⑪⑫⑬⑭⑮⑯⑰⑱⑲⑳";
+const num = (n) => (n <= 20 ? NUMS[n - 1] : "(" + n + ")");
+function markLine(text, marks, numbered) {
+  // marks: [{name, n, step}]. Wraps the first occurrence of each call on the line; numbered calls get their number right after.
+  const spans = [], missing = [];
+  for (const m of marks) {
+    const re = new RegExp("\\b" + m.name.replace(/[$]/g, "\\$") + "\\b", "g");
+    let x, hit = -1;
+    while ((x = re.exec(text))) if (!spans.some((sp) => x.index < sp.b && x.index + m.name.length > sp.a)) { hit = x.index; break; }
+    if (hit >= 0) spans.push({ a: hit, b: hit + m.name.length, m }); else missing.push(m);
+  }
+  spans.sort((p, q) => p.a - q.a);
+  const mk = (m) => (numbered(m) ? '<b class="mk" data-step="' + m.n + '">' + num(m.n) + "</b>" : "");
+  let out = "", at = 0;
+  for (const sp of spans) { out += esc(text.slice(at, sp.a)) + '<span class="call' + (sp.m.step.kind === "code" ? "" : " dim") + '" data-step="' + sp.m.n + '">' + esc(text.slice(sp.a, sp.b)) + "</span>" + mk(sp.m); at = sp.b; }
+  return out + esc(text.slice(at)) + missing.map(mk).join("");
+}
+function showFrame(f, choices) {
+  tframe = f; tsel = 0;
+  const key = f.path + ":" + f.line, cap = captions[key];
+  const main = f.steps.filter((s) => s.kind === "code" && !s.helper), helpers = f.steps.filter((s) => s.kind === "code" && s.helper), other = f.steps.filter((s) => s.kind !== "code");
+  const what = (s) => (cap && (cap.steps.find((c) => c.n === s.n) || {}).what) || (s.def && s.def.doc ? firstSentence(s.def.doc) : "");
+  const stepRow = (s, small) => '<button class="tstep2' + (small ? " small" : "") + '" data-step="' + s.n + '"' + (s.def ? ' data-into="' + esc(s.def.path) + '" data-iline="' + s.def.line + '" data-ilabel="' + esc(s.def.name) + '"' : "") + '><span class="tn' + (s.kind === "code" ? "" : " o") + '">' + s.n + '</span><span class="tb"><span class="hd"><span class="nm">' + esc(s.def ? s.def.name : s.ref) + "</span>" +
+    (s.inside ? ' <span class="badge" title="Calls this many functions in the project">' + s.inside + (s.inside === 1 ? " call" : " calls") + " inside</span>" : "") + (s.def && s.def.byName ? ' <span class="tag" title="No import says which function this is; matched on the name alone">by name</span>' : "") + "</span>" +
+    (what(s) ? '<span class="what">' + esc(what(s)) + "</span>" : "") +
+    '<span class="where">' + (s.def ? esc(s.def.path === f.path ? "line " + s.def.line : s.def.path.split("/").slice(-2).join("/") + ":" + s.def.line) : s.kind === "library" ? "package or built-in" : "Spelunk can’t tell where this goes") + " · called on line " + s.lines[0] + "</span></span></button>";
+  const crumbs = tstack.length > 1 ? '<nav class="trail" aria-label="Where you came from">' + tstack.map((c, i) => (i < tstack.length - 1 ? '<button class="lnk" data-crumb="' + i + '">' + esc(c.label || c.path) + "</button>" : "<b>" + esc(c.label || c.path) + "</b>")).join('<span class="muted"> › </span>') + ' <button class="btn" data-crumb="back" title="Back (Backspace)">← Back</button></nav>' : "";
+  let h = crumbs + '<div class="fhead"><div><h2 style="margin:6px 0 2px"><span class="tag">' + (f.kind === "route" ? "route" : "function") + "</span> " + esc(f.label) + "</h2>" +
+    '<div class="muted" style="font-size:13px">' + loc(f.path, f.line) + " · " + main.length + " step" + (main.length === 1 ? "" : "s") + (helpers.length ? ", " + helpers.length + " helper" + (helpers.length === 1 ? "" : "s") : "") + "</div>" +
+    (cap ? '<p class="fsum">' + esc(cap.summary) + ' <span class="tag">Claude</span></p>' : f.doc ? '<p class="fsum">' + esc(f.doc) + "</p>" : "") + "</div>" +
+    '<div class="fact">' + (cap ? "" : '<button class="btn" id="capgo">Explain the steps with Claude</button>') + "</div></div>" +
+    '<div id="capkey"></div>';
+  // How you get here
+  const up = f.callers;
+  if (f.note) h += '<div class="note">' + esc(f.note) + "</div>";
+  h += '<div class="card gethere"><div class="lane">How you get here</div>';
+  if (f.kind === "route") {
+    h += '<div class="flowrow">' + (up.length ? up.slice(0, 4).map((c) => callerChip(c)).join("") + (up.length > 4 ? '<span class="muted">+' + (up.length - 4) + " more</span>" : "") + '<span class="arrow">→ HTTP →</span>' : '<span class="muted">No front-end code in this project calls it.</span><span class="arrow">→</span>') + '<span class="pill2 on">' + esc(f.label) + "</span></div>";
+  } else if (up.length) {
+    h += '<div class="flowrow">' + up.slice(0, 8).map((c) => callerChip(c)).join("") + (up.length > 8 ? '<details class="more"><summary>' + (up.length - 8) + " more callers</summary>" + up.slice(8).map((c) => callerChip(c)).join("") + "</details>" : "") + '<span class="arrow">→</span><span class="pill2 on">' + esc(f.label) + "</span></div>";
+  } else h += '<p class="muted" style="margin:0">Nothing in the project calls it directly. It may be called by a framework, through an object, or by name at runtime.</p>';
+  if (f.fromEntry.length > 1) h += '<div class="muted entry">The program reaches this file through ' + f.fromEntry.map((p) => loc(p, 0, p.split("/").pop())).join(' <span class="arrow">→</span> ') + "</div>";
+  h += "</div>";
+  // Steps and code side by side
+  const lines = {};
+  for (const s of f.steps) for (const l of s.lines) (lines[l] = lines[l] || []).push({ name: (s.ref.split(".").pop() || s.ref).replace(/^(svc|evt):/, ""), n: s.n, step: s });
+  const throwsAt = new Set(f.throws);
+  const numbered = (m) => m.step.kind === "code" && (!m.step.helper || showHelpers);
+  const code = f.code.map((t, i) => { const l = f.line + i; return '<span class="l' + (throwsAt.has(l) ? " thr" : "") + '" id="F' + l + '"><i' + (throwsAt.has(l) ? ' title="Throws or raises here"' : "") + ">" + l + "</i><span>" + markLine(t, lines[l] || [], numbered) + "</span></span>"; }).join("");
+  h += '<div class="reader"><div class="card steps2"><div class="lane">What happens, in order</div>' +
+    (main.length ? main.map((s) => stepRow(s)).join("") : '<p class="muted" style="font-size:13px">It calls nothing else in this project' + (helpers.length ? " except small helpers" : "") + ".</p>") +
+    (helpers.length ? '<button class="lnk tog" id="toghelp">' + (showHelpers ? "Hide" : "Show") + " " + helpers.length + " helper" + (helpers.length === 1 ? "" : "s") + " (" + esc(helpers.slice(0, 3).map((s) => s.def.name).join(", ")) + (helpers.length > 3 ? ", …" : "") + ")</button>" + (showHelpers ? helpers.map((s) => stepRow(s, true)).join("") : "") : "") +
+    (other.length ? '<button class="lnk tog" id="togother">' + (showOther ? "Hide" : "Show") + " " + other.length + " call" + (other.length === 1 ? "" : "s") + " into packages or code Spelunk can’t follow</button>" + (showOther ? other.map((s) => stepRow(s, true)).join("") : "") : "") +
+    '<p class="muted keys">Keys: <kbd>↑</kbd> <kbd>↓</kbd> pick a step, <kbd>Enter</kbd> step in, <kbd>Backspace</kbd> back.</p></div>' +
+    '<div class="card codecard"><div class="codehead"><span class="mono muted">' + esc(f.path) + ":" + f.line + "–" + f.endLine + "</span>" + loc(f.path, f.line, "Open the whole file") + '</div><pre class="code">' + code + "</pre>" + (f.truncated ? '<p class="muted" style="padding:0 12px">Long function: the rest is in the file.</p>' : "") + "</div></div>";
+  if (choices && choices.length > 1) h += '<p class="muted" style="margin-top:12px">Also matches: ' + choices.filter((c) => !(c.path === f.path && c.line === f.line)).slice(0, 8).map((c) => '<button class="lnk" data-frame="' + esc(c.path) + '" data-fline="' + (c.line || "") + '" data-flabel="' + esc(c.label) + '">' + esc(c.label + " (" + c.path + ")") + "</button>").join(", ") + "</p>";
+  $("#tr").innerHTML = h;
+  if (main.length) selectStep(main[0].n, false);
+  const cg = $("#capgo"); if (cg) cg.addEventListener("click", () => captionNow());
+  const th = $("#toghelp"); if (th) th.addEventListener("click", () => { showHelpers = !showHelpers; showFrame(f, choices); });
+  const to = $("#togother"); if (to) to.addEventListener("click", () => { showOther = !showOther; showFrame(f, choices); });
+  if (autoCaption && !cap) captionNow();
+}
+const callerChip = (c) => (c.frameLine ? '<button class="pill2" data-frame="' + esc(c.path) + '" data-fline="' + c.frameLine + '" data-flabel="' + esc(c.label) + '" title="Step up into ' + esc(c.label) + " (" + esc(c.path) + ":" + c.line + ')">' + (c.kind === "route" ? '<span class="tag">route</span> ' : c.kind === "client" ? '<span class="tag">front end</span> ' : "↑ ") + esc(c.label) + ' <span class="muted">' + esc(c.path.split("/").pop()) + ":" + c.line + "</span></button>" : '<button class="pill2" data-open="' + esc(c.path) + '" data-line="' + c.line + '">' + esc(c.label) + ' <span class="muted">:' + c.line + "</span></button>");
+function selectStep(n, scroll = true) {
+  tsel = n;
+  document.querySelectorAll(".tstep2").forEach((b) => b.classList.toggle("sel", Number(b.dataset.step) === n));
+  document.querySelectorAll(".code .call, .code .mk").forEach((b) => b.classList.toggle("sel", Number(b.dataset.step) === n));
+  const s = tframe && tframe.steps.find((x) => x.n === n);
+  document.querySelectorAll(".code .l.cur").forEach((l) => l.classList.remove("cur"));
+  if (s) { const el = document.getElementById("F" + s.lines[0]); if (el) { el.classList.add("cur"); if (scroll) el.scrollIntoView({ block: "nearest" }); } }
+}
+async function captionNow(apiKey) {
+  const f = tframe; if (!f) return;
+  const box = $("#capkey"), btn = $("#capgo");
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner"></span> Asking Claude…'; }
+  try {
+    captions[f.path + ":" + f.line] = await api("/api/frame/explain", { path: f.path, line: f.line, apiKey });
+    autoCaption = true;
+    if (tframe === f) showFrame(f, []);
+  } catch (e) {
+    if (btn) { btn.disabled = false; btn.textContent = "Explain the steps with Claude"; }
+    if (/API key/.test(e.message) && box) {
+      box.innerHTML = '<form class="searchrow" id="capform"><input class="field" id="capk" type="password" placeholder="Anthropic API key (sk-ant-…)" autocomplete="off" aria-label="Anthropic API key"><button class="btn primary">Explain</button></form><p class="muted" style="font-size:12.5px">Kept in memory for this visit only, never saved. Each function costs about a cent; answers are cached.</p>';
+      $("#capform").addEventListener("submit", (ev) => { ev.preventDefault(); captionNow($("#capk").value); });
+    } else if (box) box.innerHTML = '<div class="note err">' + esc(e.message) + "</div>";
+  }
+}
+
+// The older trace, still used for files: imports, importers, and how entry points reach them.
 const tree = (nodes, top) => '<ul class="tree' + (top ? " top" : "") + '">' + nodes.map((n) => "<li>" + traceBtn(n.name) + " " + loc(n.path, n.line) + (n.byName ? ' <span class="tag" title="No import says which function this is; matched on the name alone">by name</span>' : "") + (n.children.length ? tree(n.children) : "") + "</li>").join("") + "</ul>";
 const callStats = (c) => {
   const parts = [c.resolved + " call" + (c.resolved === 1 ? "" : "s") + " resolved"];
@@ -752,7 +1038,11 @@ async function useLink() {
 }
 
 // ---------- File drawer
-async function openFile(path, line) {
+let drawerHist = [];
+async function openFile(path, line, fromDef) {
+  // Following a call from inside the drawer keeps a trail, so Back returns to where you were reading.
+  if (fromDef === true && drawerData && $("#drawer").classList.contains("open")) drawerHist.push({ path: drawerData.f.facts.path, line: drawerData.line });
+  else if (!fromDef) drawerHist = [];
   $("#drawer").classList.add("open");
   $("#scrim").classList.add("open");
   $("#dtitle").innerHTML = "<b>" + esc(path) + "</b>";
@@ -763,6 +1053,10 @@ async function openFile(path, line) {
     $("#dtitle").innerHTML = "<b>" + esc(x.path) + '</b><div class="muted" style="font-size:12.5px">' + esc(x.language) + " · " + esc(x.role) + " · " + fmt(x.lines) + " lines" + (x.entry ? " · starts the program (" + esc(x.entry) + ")" : "") + "</div>" + (x.doc ? '<div style="font-size:13px;margin-top:4px">' + prose(x.doc) + "</div>" : "") +
       (report && report.links ? '<a style="font-size:12.5px" target="_blank" rel="noopener noreferrer" href="' + esc(report.links.template.replace("{path}", x.path).replace("{line}", line ? report.links.anchor + line : "")) + '">Open on the code host ↗</a>' : "");
     drawerData = { f, line };
+    const fn = line ? x.symbols.filter((sy) => (sy.kind === "function" || sy.kind === "method") && sy.line <= line && sy.endLine >= line).sort((a, b) => a.endLine - a.line - (b.endLine - b.line))[0] : null;
+    $("#dnav").innerHTML = (drawerHist.length ? '<button class="btn" id="dback">← Back to ' + esc(drawerHist[drawerHist.length - 1].path.split("/").pop()) + "</button>" : "") +
+      (fn ? '<button class="btn" data-readas="' + esc(x.path) + '" data-line="' + fn.line + '">Read ' + esc(fn.name) + " as a trace</button>" : "") +
+      '<span class="muted" style="font-size:12px">Click an underlined call to jump to its code.</span>';
     showTab(drawerTab);
   } catch (e) { $("#dpane").innerHTML = '<div class="note err" style="margin:16px">' + esc(e.message) + "</div>"; }
 }
@@ -773,7 +1067,9 @@ function showTab(tab) {
   if (!drawerData) return;
   const { f, line } = drawerData, x = f.facts;
   if (tab === "code") {
-    $("#dpane").innerHTML = '<pre class="code">' + f.source.split("\n").map((t, i) => '<span class="l' + (i + 1 === line ? " hl" : "") + '" id="L' + (i + 1) + '"><i>' + (i + 1) + "</i>" + esc(t) + "</span>").join("") + "</pre>";
+    const refs = {};
+    for (const [ref, l] of x.callSites) if (f.defs && f.defs[ref] && !/^(svc|evt):/.test(ref)) (refs[l] = refs[l] || []).push(ref);
+    $("#dpane").innerHTML = '<pre class="code">' + f.source.split("\n").map((t, i) => '<span class="l' + (i + 1 === line ? " hl" : "") + '" id="L' + (i + 1) + '"><i>' + (i + 1) + "</i>" + "<span>" + crefLine(t, refs[i + 1] || [], x.path) + "</span></span>").join("") + "</pre>";
     if (line) { const el = document.getElementById("L" + line); if (el) el.scrollIntoView({ block: "center" }); }
   } else {
     let h = '<div class="outline">';
@@ -788,15 +1084,50 @@ function showTab(tab) {
     $("#dpane").innerHTML = h + "</div>";
   }
 }
-function closeFile() { $("#drawer").classList.remove("open"); $("#scrim").classList.remove("open"); }
+function closeFile() { $("#drawer").classList.remove("open"); $("#scrim").classList.remove("open"); drawerHist = []; }
+function crefLine(text, refs, path) {
+  const spans = [];
+  for (const ref of refs) {
+    const name = ref.split(".").pop();
+    if (!name || !/^[A-Za-z_$][\w$]*$/.test(name)) continue;
+    const re = new RegExp("\\b" + name.replace(/[$]/g, "\\$") + "\\s*\\(", "g");
+    let x;
+    while ((x = re.exec(text))) if (!spans.some((sp) => x.index < sp.b && x.index + name.length > sp.a)) spans.push({ a: x.index, b: x.index + name.length, ref });
+  }
+  spans.sort((p, q) => p.a - q.a);
+  let out = "", at = 0;
+  for (const sp of spans) { out += esc(text.slice(at, sp.a)) + '<span class="cref" data-ref="' + esc(sp.ref) + '" data-from="' + esc(path) + '">' + esc(text.slice(sp.a, sp.b)) + "</span>"; at = sp.b; }
+  return out + esc(text.slice(at));
+}
+function goToDef(ref) {
+  const d = drawerData && drawerData.f.defs && drawerData.f.defs[ref];
+  if (d) return openFile(d[0], d[1], true);
+}
+function drawerBack() { const prev = drawerHist.pop(); if (prev) openFile(prev.path, prev.line, "back"); }
 
 // ---------- Wiring
 document.addEventListener("click", async (e) => {
+  const mark = e.target.closest(".code .call, .code .mk");
+  if (mark && tframe && mark.closest("#tr")) {
+    const s = tframe.steps.find((x) => x.n === Number(mark.dataset.step));
+    if (s && s.def) return stepInto(s.def.path, s.def.line, s.def.name);
+    return selectStep(Number(mark.dataset.step));
+  }
+  const cref = e.target.closest(".cref");
+  if (cref) return goToDef(cref.dataset.ref);
   const t = e.target.closest("button, a");
   if (!t) return;
   const d = t.dataset;
   try {
-    if (t.matches("a[href^='#mod-']")) { e.preventDefault(); vModule(decodeURIComponent(t.getAttribute("href").slice(5)).replace(/^root$/, "")); return; }
+    if (t.matches("a[href^='#mod-']")) { e.preventDefault(); vFocus(decodeURIComponent(t.getAttribute("href").slice(5)).replace(/^root$/, "")); return; }
+    if (d.frame !== undefined) { tstack.push({ path: d.frame, line: Number(d.fline) || 1, label: d.flabel }); showHelpers = false; showOther = false; return loadFrame(tstack[tstack.length - 1]); }
+    if (d.into !== undefined) return stepInto(d.into, Number(d.iline), d.ilabel);
+    if (d.crumb !== undefined) return d.crumb === "back" ? stepBack() : stepBack(Number(d.crumb));
+    if (d.area !== undefined) { mapAreas = d.area ? (mapAreas.includes(d.area) ? mapAreas.filter((x) => x !== d.area) : mapAreas.concat(d.area)) : []; document.querySelectorAll("[data-area]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.area ? mapAreas.includes(b.dataset.area) : !mapAreas.length))); return redrawMap(); }
+    if (d.focus !== undefined) return vFocus(d.focus);
+    if (d.mapmode) { mapMode = d.mapmode; return vOverview(); }
+    if (t.id === "dback") return drawerBack();
+    if (d.readas !== undefined) { closeFile(); tstack = []; return stepInto(d.readas, Number(d.line), ""); }
     if (d.open !== undefined) return openFile(d.open, Number(d.line) || 0);
     if (d.jump) { drawerData.line = Number(d.jump); return showTab("code"); }
     if (d.trace !== undefined) { closeFile(); view = "trace"; renderNav(); return vTrace(d.trace); }
@@ -821,6 +1152,16 @@ document.addEventListener("click", async (e) => {
   } catch (err) { alert(err.message); }
 });
 $("#scrim").addEventListener("click", closeFile);
+document.addEventListener("mouseover", (e) => { const b = e.target.closest(".tstep2"); if (b && tframe) selectStep(Number(b.dataset.step), false); });
+document.addEventListener("keydown", (e) => {
+  if (view !== "trace" || !tframe || $("#drawer").classList.contains("open") || /INPUT|TEXTAREA/.test(document.activeElement.tagName)) return;
+  const shown = [...document.querySelectorAll(".tstep2")].map((b) => Number(b.dataset.step));
+  const i = shown.indexOf(tsel);
+  if (e.key === "ArrowDown" || e.key === "j") { e.preventDefault(); selectStep(shown[Math.min(shown.length - 1, i + 1)] ?? shown[0]); }
+  else if (e.key === "ArrowUp" || e.key === "k") { e.preventDefault(); selectStep(shown[Math.max(0, i - 1)] ?? shown[0]); }
+  else if (e.key === "Enter") { const s = tframe.steps.find((x) => x.n === tsel); if (s && s.def) { e.preventDefault(); stepInto(s.def.path, s.def.line, s.def.name); } }
+  else if (e.key === "Backspace" && tstack.length > 1) { e.preventDefault(); stepBack(); }
+});
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeFile(); if (e.key === "/" && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) { e.preventDefault(); go("find"); } });
 $("#pickform").addEventListener("submit", (e) => { e.preventDefault(); if (state.hosted) return useLink(); useFolder($("#pickpath").value || pickerDir); });
 $("#browse").addEventListener("click", () => openPicker($("#pickpath").value));
@@ -870,6 +1211,7 @@ export function dashboardHtml(): string {
 <div class="scrim" id="scrim"></div>
 <aside class="drawer" id="drawer" aria-label="File">
   <div class="dh"><div class="t" id="dtitle"></div><button class="btn" id="dclose" aria-label="Close file">✕</button></div>
+  <div class="dnav" id="dnav"></div>
   <div class="tabs" id="dtabs" role="tablist"><button role="tab" data-tab="code" aria-selected="true">Code</button><button role="tab" data-tab="outline" aria-selected="false">What's in it</button></div>
   <div class="pane" id="dpane"></div>
 </aside>
