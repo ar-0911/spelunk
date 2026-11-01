@@ -13,7 +13,7 @@ const MAX_LINES = 250;
 /** Files bigger than this aren't searched or shown. */
 const MAX_BYTES = 2_000_000;
 
-async function readIndexed(index: Index, f: FileFacts): Promise<string[] | undefined> {
+export async function readIndexed(index: Index, f: FileFacts): Promise<string[] | undefined> {
   if (f.bytes > MAX_BYTES) return undefined;
   const root = await realpath(index.root).catch(() => index.root);
   const real = await realpath(join(index.root, f.path)).catch(() => undefined);
