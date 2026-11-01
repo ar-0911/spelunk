@@ -1,3 +1,4 @@
+import { explainFeature, listFeatures } from "../analysis/features.js";
 import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
 import { readdir, readFile, realpath, rm, stat } from "node:fs/promises";
@@ -446,6 +447,18 @@ export async function startUi(options: UiOptions = {}): Promise<{ url: string; c
       const w = await load(s, false);
       const kinds = (q.get("kind") ?? "").split(",").filter((k): k is Hit["kind"] => ["file", "symbol", "route", "env"].includes(k));
       return where(w.index, q.get("q") ?? "", { limit: 30, ...(kinds.length ? { kinds } : {}) });
+    },
+
+    "GET /api/features": async (s) => {
+      const w = await load(s, false);
+      return listFeatures(w.index, w.graph);
+    },
+
+    "GET /api/feature": async (s, q) => {
+      const w = await load(s, false);
+      const f = await explainFeature(w.index, w.graph, q.get("id") ?? "", await w.risks());
+      if (!f) throw new HttpError(404, "That feature isn't in this repository any more. Rescan and try again.");
+      return f;
     },
 
     "GET /api/trace": async (s, q) => {

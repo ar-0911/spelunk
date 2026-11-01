@@ -64,6 +64,7 @@ describe("remote tools", async () => {
     const names = tools.map((t) => t.name);
     expect(names).toContain("search_text");
     expect(names).toContain("source");
+    expect(names).toContain("explain_feature");
     for (const local of ["impact", "agents", "rescan"]) expect(names).not.toContain(local);
     for (const t of tools) expect(t.inputSchema.required).toContain("repo");
   });
@@ -74,6 +75,8 @@ describe("remote tools", async () => {
     expect(await call("overview", { repo: "owner/notes" })).toContain("src/main.ts");
     expect(await call("search_text", { repo: "owner/notes", text: "api/notse" })).toBe('src/web/client.ts:3  await fetch("/api/notse");');
     expect(await call("trace", { repo: "slow/repo", target: "x" })).toMatch(/Still downloading/);
+    expect(await call("features", { repo: "owner/notes" })).toMatch(/^0 features[\s\S]*POST \/api\/notes/);
+    expect(await call("explain_feature", { repo: "owner/notes", feature: "nope" })).toBe('No feature "nope". Features: none found.');
   });
 });
 

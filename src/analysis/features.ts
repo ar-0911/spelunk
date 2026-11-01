@@ -1,23 +1,32 @@
-import { basename, extname, join } from "node:path";
+import { basename, dirname, extname, join } from "node:path";
 import { readFile, realpath } from "node:fs/promises";
 import type { Graph } from "./graph.js";
 import type { Risk } from "./risks.js";
 import { allRoutes, segments, type RouteAt } from "./routes.js";
 import { readIndexed } from "../query/source.js";
-import { trace, type CallNode } from "../query/trace.js";
+import { routeRange, trace, type CallNode, type Trace } from "../query/trace.js";
 import type { FileFacts, Index, SymbolInfo } from "../types.js";
 
 /**
  * Features: what the app does, organised the way a developer asks about it
  * ("how do comments work?") rather than by folder.
  *
- * A feature is a noun the code keeps coming back to: a database table, a group
- * of API routes on one resource, or a Moleculer service. Files named after the
- * noun (comments.ts, CommentsPanel.tsx) attach to it. Its walkthrough follows
- * the main route across the layers: the screen that calls it, the route
- * handler, the service function it calls, and the table that function writes,
- * showing only the lines that matter at each step. Everything here is static;
- * Claude can rewrite the summary later, but nothing depends on it.
+ * Everything here comes from the structure of the code, never from what things
+ * are called, so a repo that names `addComment` `postThing` gets the same answer:
+ *
+ * 1. Entry points are the server routes and Moleculer actions the code registers.
+ * 2. Each is traced through resolved calls (imports, local definitions, the
+ *    broker) to the functions it reaches, and to the database tables those
+ *    functions use (the table's own identifier, or its name in SQL).
+ * 3. Helpers that most entry points reach (an access check, `getDb()`) are
+ *    shared plumbing and don't decide anything.
+ * 4. Entry points whose closest table is the same form one feature. Without a
+ *    table, those calling the same function do; actions of one Moleculer
+ *    service do. The rest are listed as "other entry points".
+ *
+ * Names appear only as labels (the table's name, the service's). The same code
+ * always gives the same features and steps, and a call Spelunk couldn't follow
+ * is reported as such instead of being guessed.
  */
 
 export type Layer = "screen" | "client" | "route" | "service" | "data";
@@ -35,7 +44,7 @@ export interface FeatureStep {
   title: string;
   path: string;
   line: number;
-  detail?: string;
+  detail?: string | undefined;
   code: CodeLine[];
 }
 
@@ -49,32 +58,52 @@ export interface Table {
   fields: string[];
 }
 
+/** Why the entry points of a feature belong together. */
+export type FeatureKind = "table" | "service" | "shared-code";
+
 export interface FeatureSummary {
   id: string;
   name: string;
-  routes: number;
+  kind: FeatureKind;
+  /** Routes and actions. */
+  entries: number;
   tables: string[];
   files: number;
-  /** "service" when the feature is a Moleculer service. */
-  kind: "resource" | "service";
+}
+
+export interface EntryPoint {
+  label: string;
+  path: string;
+  line: number;
+  /** The function the work happens in, when it isn't the handler itself. */
+  does?: { name: string; path: string; line: number };
 }
 
 export interface Feature extends FeatureSummary {
+  /** What groups these entry points, in one sentence. */
+  why: string;
   summary: string;
   steps: FeatureStep[];
-  /** Every route of the feature, with the function each one ends up in. */
-  actions: { label: string; path: string; line: number; does?: { name: string; path: string; line: number } }[];
-  /** Other code that reaches the same service function: an MCP tool, a job, a CLI. */
+  actions: EntryPoint[];
+  /** Other code that reaches the same function without going through a route: an MCP tool, a job, a CLI. */
   otherWays: { label: string; path: string; line: number }[];
   /** Where to make a change, in the order you'd touch them. */
   change: { path: string; line?: number; why: string }[];
   tests: string[];
   watchOut: { title: string; path: string; line?: number }[];
-  /** Other UI and source files about this feature that the walkthrough didn't visit. */
-  related: string[];
+  /** Calls on the main path Spelunk couldn't follow, so the walkthrough may stop early. */
+  gaps: string[];
+  /** Other client code that calls this feature's routes. */
+  related: { path: string; line: number; label: string }[];
 }
 
-// ---------- names
+export interface FeatureList {
+  features: FeatureSummary[];
+  /** Entry points that share no table, function or service with any other. */
+  other: EntryPoint[];
+}
+
+// ---------- labels (display only)
 
 const words = (s: string) =>
   s
@@ -82,46 +111,17 @@ const words = (s: string) =>
     .replace(/[-_.\s]+/g, " ")
     .toLowerCase()
     .trim();
-const singular = (w: string) => (w.length > 4 && w.endsWith("ies") ? `${w.slice(0, -3)}y` : /(ss|us|is|ws)$/.test(w) ? w : /(sses|xes|ches|shes)$/.test(w) ? w.slice(0, -2) : w.length > 3 && w.endsWith("s") ? w.slice(0, -1) : w);
-/** "pageQuestions", "page_questions" and "PageQuestion" all become "page question". */
-export const nounKey = (s: string) => words(s).split(" ").filter(Boolean).map(singular).join(" ");
-const idOf = (key: string) => key.replace(/ /g, "-");
 const title = (s: string) => {
   const w = words(s);
   return w.charAt(0).toUpperCase() + w.slice(1);
 };
-const fileKey = (path: string) => nounKey(basename(path, extname(path)));
-/** Does a file name mention the noun as whole words ("CommentsPanel" mentions "comment")? */
-const mentions = (path: string, key: string) => ` ${fileKey(path)} `.includes(` ${key} `);
-
-/** Path segments that never name a resource. */
-const NOT_RESOURCES = new Set(["api", "rest", "graphql", "rpc", "internal", "public", "static", "assets", "_next", ".well-known", "healthz", "health", "ping", "favicon.ico", "robots.txt", "index", "", "app"]);
-
-/**
- * The resource a route works on. Without parameters it's the first segment
- * (/oauth/token → oauth). With them, the last plural-looking segment, so
- * /api/pages/:id/comments/:cid/resolve is about comments and /api/pages/:id/lock
- * about pages.
- */
-export function resourceOf(path: string): string | undefined {
-  const segs = segments(path).filter((s) => !NOT_RESOURCES.has(s.toLowerCase()) && !/^v\d+$/i.test(s) && !/\.\w+$/.test(s));
-  const statics = segs.filter((s) => s !== "*");
-  if (!statics.length) return undefined;
-  if (!segs.includes("*")) return statics[0];
-  let res: string | undefined;
-  segs.forEach((s, i) => {
-    if (s === "*") return;
-    const actionOnItem = i === segs.length - 1 && segs[i - 1] === "*" && !s.endsWith("s");
-    if (!(actionOnItem && res)) res = s;
-  });
-  return res;
-}
+const slug = (s: string) => words(s).replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "feature";
 
 // ---------- tables
 
 const TABLE_PATTERNS: { orm: string; test: (f: FileFacts) => boolean; find: RegExp; field: RegExp; nameGroup: number; symbolGroup: number }[] = [
   { orm: "drizzle", test: (f) => f.calls.some((c) => /^(pg|sqlite|mysql)Table$/.test(c)), find: /(?:export\s+)?const\s+(\w+)\s*=\s*(?:pg|sqlite|mysql)Table\(\s*["'`](\w+)["'`]/g, field: /^\s*(\w+)\s*:\s*\w+\(/, nameGroup: 2, symbolGroup: 1 },
-  { orm: "sqlalchemy", test: (f) => f.language === "python" && f.imports.some((i) => /sqlalchemy/.test(i.external ?? i.spec)), find: /class\s+(\w+)\([^)]*\):[\s\S]{0,400}?__tablename__\s*=\s*["'](\w+)["']/g, field: /^\s*(\w+)\s*(?::\s*Mapped\[[^\]]*\])?\s*=\s*(?:\w+\.)?(?:Column|mapped_column|relationship)\(/, nameGroup: 2, symbolGroup: 1 },
+  { orm: "sqlalchemy", test: (f) => f.language === "python" && f.imports.some((i) => /sqlalchemy/.test(i.external ?? i.spec)), find: /class\s+(\w+)\([^)]*\):(?:(?!\nclass\s)[\s\S]){0,400}?__tablename__\s*=\s*["'](\w+)["']/g, field: /^\s*(\w+)\s*(?::\s*Mapped\[[^\]]*\])?\s*=\s*(?:\w+\.)?(?:Column|mapped_column|relationship)\(/, nameGroup: 2, symbolGroup: 1 },
   { orm: "django", test: (f) => f.language === "python" && /models\.py$/.test(f.path), find: /class\s+((\w+))\((?:models\.)?Model\)/g, field: /^\s*(\w+)\s*=\s*models\.\w+/, nameGroup: 2, symbolGroup: 1 },
   { orm: "mongoose", test: (f) => f.imports.some((i) => i.external === "mongoose"), find: /model\(\s*["'`]((\w+))["'`]/g, field: /^\s*(\w+)\s*:\s*[{[A-Z"']/, nameGroup: 2, symbolGroup: 1 },
   { orm: "sequelize", test: (f) => f.imports.some((i) => i.external === "sequelize"), find: /define\(\s*["'`]((\w+))["'`]/g, field: /^\s*(\w+)\s*:\s*[{A-Z]/, nameGroup: 2, symbolGroup: 1 },
@@ -192,82 +192,314 @@ export async function findTables(index: Index): Promise<Table[]> {
   return out;
 }
 
-// ---------- grouping
+// ---------- entry points and what they reach
 
-interface Group {
-  key: string;
-  names: Set<string>;
-  tables: Table[];
-  routes: RouteAt[];
-  services: { name: string; path: string; actions: SymbolInfo[] }[];
+interface Use {
+  table: Table;
+  /** 0 is the handler's own code, 1 a function it calls, and so on. */
+  depth: number;
+  writes: boolean;
+  /** The call chain from the handler to the function that uses the table (empty when the handler does). */
+  chain: CallNode[];
+  line: number;
 }
 
-const cache = new WeakMap<Index, Promise<{ groups: Group[]; tables: Table[] }>>();
+interface Entry {
+  key: string;
+  label: string;
+  path: string;
+  line: number;
+  route?: RouteAt;
+  action?: { service: string; symbol: SymbolInfo };
+  trace: Trace;
+  /** Every function reached, as "path#line". */
+  reached: Set<string>;
+  uses: Use[];
+}
 
-async function groupsOf(index: Index): Promise<{ groups: Group[]; tables: Table[] }> {
-  let p = cache.get(index);
-  if (!p) {
-    p = (async () => {
-      const tables = await findTables(index);
-      const groups = new Map<string, Group>();
-      const get = (raw: string) => {
-        const key = nounKey(raw);
-        if (key.length < 3) return undefined;
-        let g = groups.get(key);
-        if (!g) groups.set(key, (g = { key, names: new Set(), tables: [], routes: [], services: [] }));
-        g.names.add(raw);
-        return g;
-      };
-      for (const t of tables) get(t.name)?.tables.push(t);
-      const serverRoutes = allRoutes(index, "server").filter((r) => index.files.find((f) => f.path === r.file)?.role === "source");
-      const byService = new Map<string, { path: string; actions: SymbolInfo[] }>();
-      for (const f of index.files) {
-        if (f.role !== "source") continue;
-        for (const s of f.symbols) {
-          if (s.broker !== "action" || !s.parent) continue;
-          const e = byService.get(s.parent) ?? { path: f.path, actions: [] };
-          e.actions.push(s);
-          byService.set(s.parent, e);
-        }
-      }
-      for (const [name, e] of byService) get(name.replace(/^v\d+\./, ""))?.services.push({ name, ...e });
-      for (const r of serverRoutes) {
-        // A Moleculer gateway alias belongs to the service whose action it runs.
-        const svc = r.handler?.startsWith("svc:") ? r.handler.slice(4, r.handler.lastIndexOf(".")) : undefined;
-        const res = svc ? svc.replace(/^v\d+\./, "") : resourceOf(r.path);
-        if (res) get(res)?.routes.push(r);
-      }
-      return { groups: [...groups.values()], tables };
-    })();
-    cache.set(index, p);
+interface Analysis {
+  tables: Table[];
+  entries: Entry[];
+  /** Functions most entry points reach: plumbing, not part of any one feature. */
+  shared: Set<string>;
+  groups: Group[];
+  other: Entry[];
+  /** Each entry point's nearest table. */
+  primary: Map<string, Use>;
+}
+
+interface Group {
+  id: string;
+  name: string;
+  kind: FeatureKind;
+  why: string;
+  entries: Entry[];
+  table?: Table;
+  /** For a group formed by a shared function, that function. */
+  fn?: CallNode;
+}
+
+const nodeKey = (n: { path: string; line: number }) => `${n.path}#${n.line}`;
+const flatten = (flow: CallNode[]): CallNode[] => flow.flatMap((n) => [n, ...flatten(n.children)]);
+const WRITES = /\b(insert|update|delete|upsert|create|save|destroy|remove|bulk_?create|merge|add|put|set|values|replace)\w*\s*\(|\b(INSERT|UPDATE|DELETE)\b/i;
+
+/** How code refers to a table: its identifier, a Prisma client property, or its name after FROM/INTO/… in SQL. */
+function tableRef(t: Table): RegExp {
+  const esc = t.symbol.replace(/[$]/g, "\\$");
+  if (t.orm === "prisma") return new RegExp(`\\.${t.symbol.charAt(0).toLowerCase()}${t.symbol.slice(1)}\\.\\w+\\(`);
+  if (t.orm === "sql") return new RegExp(`\\b(from|into|update|join|table)\\s+[\`"\\[]?(\\w+\\.)?${esc}\\b`, "i");
+  return new RegExp(`(?<![\\w$.])${esc}\\b`);
+}
+
+/**
+ * The file with string literals and comments blanked to spaces, keeping every newline, so a
+ * table's name in a route path ("/api/comments"), a template ("Shown on comments") or a comment
+ * doesn't count as using the table.
+ */
+export function codeOnly(text: string, python: boolean): string {
+  let out = "";
+  let i = 0;
+  const blank = (to: number) => {
+    out += text.slice(i, to).replace(/[^\n]/g, " ");
+    i = to;
+  };
+  while (i < text.length) {
+    const c = text[i]!;
+    const two = text.slice(i, i + 2);
+    const three = text.slice(i, i + 3);
+    if (!python && two === "//") blank(text.indexOf("\n", i) < 0 ? text.length : text.indexOf("\n", i));
+    else if (!python && two === "/*") blank(text.indexOf("*/", i + 2) < 0 ? text.length : text.indexOf("*/", i + 2) + 2);
+    else if (python && c === "#") blank(text.indexOf("\n", i) < 0 ? text.length : text.indexOf("\n", i));
+    else if (python && (three === '"""' || three === "'''")) blank(text.indexOf(three, i + 3) < 0 ? text.length : text.indexOf(three, i + 3) + 3);
+    else if (c === '"' || c === "'" || c === "`") {
+      let j = i + 1;
+      while (j < text.length && text[j] !== c && (c === "`" || text[j] !== "\n")) j += text[j] === "\\" ? 2 : 1;
+      blank(Math.min(j + 1, text.length));
+    } else {
+      out += c;
+      i++;
+    }
   }
+  return out;
+}
+
+const DEPTH = 4;
+const analyses = new WeakMap<Index, Promise<Analysis>>();
+
+export function analyse(index: Index, g: Graph): Promise<Analysis> {
+  let p = analyses.get(index);
+  if (!p) analyses.set(index, (p = build(index, g)));
   return p;
 }
 
-const sourceFiles = (index: Index) => index.files.filter((f) => f.role === "source");
+async function build(index: Index, g: Graph): Promise<Analysis> {
+  // A table defined both in code and in a migration's SQL is one table: keep the code's, which is what code refers to.
+  const found = (await findTables(index)).sort((a, b) => Number(a.orm === "sql") - Number(b.orm === "sql") || a.path.localeCompare(b.path) || a.line - b.line);
+  const tables = found.filter((t, i) => found.findIndex((x) => x.name.toLowerCase() === t.name.toLowerCase()) === i);
+  const refs = tables.map((t) => ({ t, re: tableRef(t) }));
+  const fileOf = new Map(index.files.map((f) => [f.path, f]));
+  const lineCache = new Map<string, Promise<{ raw: string[]; code: string[] } | undefined>>();
+  const linesOf = (path: string) => {
+    let l = lineCache.get(path);
+    if (!l) {
+      const f = fileOf.get(path);
+      l = (async () => {
+        const raw = f ? await readIndexed(index, f) : undefined;
+        return raw && { raw, code: codeOnly(raw.join("\n"), f!.language === "python").split("\n") };
+      })();
+      lineCache.set(path, l);
+    }
+    return l;
+  };
+  /** The tables a stretch of code uses, with the first line of each. */
+  const usesIn = async (path: string, from: number, to: number) => {
+    const file = await linesOf(path);
+    const out: { table: Table; line: number; writes: boolean }[] = [];
+    if (!file) return out;
+    for (const { t, re } of refs) {
+      if (!canSee(path, t)) continue;
+      // SQL lives in strings, so it's matched in the raw text; everything else only in code.
+      const lines = t.orm === "sql" ? file.raw : file.code;
+      // The first line that writes the table, else the first that uses it.
+      let first: number | undefined;
+      for (let i = from; i <= Math.min(to, lines.length); i++) {
+        if (!re.test(lines[i - 1]!)) continue;
+        first ??= i;
+        // A statement often spans lines (`db.insert(comments)\n  .values(…)`): look at the next two for the verb.
+        if (WRITES.test(file.code.slice(i - 1, i + 2).join(" "))) {
+          out.push({ table: t, line: i, writes: true });
+          first = undefined;
+          break;
+        }
+      }
+      if (first) out.push({ table: t, line: first, writes: false });
+    }
+    return out;
+  };
+  /**
+   * Whether code in this file can refer to the table at all: it defines it, imports its file (directly or
+   * through one re-exporting file), or the table is reached by name (SQL, Prisma). A local variable that
+   * happens to be called `members` in a file that never imports the schema isn't the table.
+   */
+  const canSee = (path: string, t: Table) => {
+    if (t.orm === "sql" || t.orm === "prisma" || path === t.path) return true;
+    const f = fileOf.get(path);
+    if (f?.language === "go") return dirname(path) === dirname(t.path) || f.imports.some((i) => i.targets.some((x) => dirname(x) === dirname(t.path)));
+    const out = g.out.get(path) ?? new Set<string>();
+    return out.has(t.path) || [...out].some((x) => g.out.get(x)?.has(t.path));
+  };
+  const symbolAt = (path: string, line: number) => fileOf.get(path)?.symbols.find((s) => s.line === line);
 
-function filesAbout(index: Index, key: string): FileFacts[] {
-  return sourceFiles(index).filter((f) => mentions(f.path, key));
+  // 1. Entry points: routes defined in source, and Moleculer actions.
+  const raw: Omit<Entry, "reached" | "uses">[] = [];
+  for (const r of allRoutes(index, "server")) {
+    if (fileOf.get(r.file)?.role !== "source") continue;
+    const label = `${r.method} ${r.servicePath && !r.path ? r.servicePath : r.path}`;
+    raw.push({ key: `${r.file}:${r.line}:${label}`, label, path: r.file, line: r.line, route: r, trace: trace(index, g, { kind: "route", label, path: r.file, line: r.line, route: r }, { depth: DEPTH }) });
+  }
+  for (const f of index.files) {
+    if (f.role !== "source") continue;
+    for (const s of f.symbols) {
+      if (s.broker !== "action" || !s.parent) continue;
+      const label = `action ${s.parent}.${s.name}`;
+      raw.push({ key: `${f.path}:${s.line}:${label}`, label, path: f.path, line: s.line, action: { service: s.parent, symbol: s }, trace: trace(index, g, { kind: "symbol", label, path: f.path, line: s.line, symbol: s }, { depth: DEPTH }) });
+    }
+  }
+
+  // 2. What each reaches: functions, and the tables they use, nearest first.
+  const entries: Entry[] = [];
+  for (const e of raw) {
+    const reached = new Set(flatten(e.trace.flow).map(nodeKey));
+    const uses: Use[] = [];
+    const own = e.route ? routeRange(index, e.route) : e.action ? { from: e.action.symbol.line, to: e.action.symbol.endLine } : undefined;
+    if (own) for (const u of await usesIn(e.path, own.from, own.to)) uses.push({ ...u, depth: 0, chain: [] });
+    const walk = async (nodes: CallNode[], chain: CallNode[]) => {
+      for (const n of nodes) {
+        const sym = symbolAt(n.path, n.line);
+        const here = [...chain, n];
+        // Constructing a model (`Order(...)`) reaches its class: that's the table's definition, not code using it.
+        if (tables.some((t) => t.path === n.path && t.line === n.line)) continue;
+        if (sym) for (const u of await usesIn(n.path, sym.line, sym.endLine)) uses.push({ ...u, depth: here.length, chain: here });
+        await walk(n.children, here);
+      }
+    };
+    await walk(e.trace.flow, []);
+    entries.push({ ...e, reached, uses });
+  }
+
+  // 3. Shared plumbing: functions reached by many entry points.
+  const fanIn = new Map<string, number>();
+  for (const e of entries) for (const k of e.reached) fanIn.set(k, (fanIn.get(k) ?? 0) + 1);
+  const limit = Math.max(4, Math.ceil(entries.length * 0.15));
+  const shared = new Set([...fanIn].filter(([, n]) => n > limit).map(([k]) => k));
+  const isShared = (u: Use) => u.chain.some((n) => shared.has(nodeKey(n)));
+
+  // 4. Group: by nearest table, by Moleculer service, by a shared function.
+  const tableReach = new Map<Table, number>();
+  for (const e of entries) for (const t of new Set(e.uses.filter((u) => !isShared(u)).map((u) => u.table))) tableReach.set(t, (tableReach.get(t) ?? 0) + 1);
+  const primary = (e: Entry): Use | undefined =>
+    e.uses
+      .filter((u) => !isShared(u))
+      .sort((a, b) => a.depth - b.depth || Number(b.writes) - Number(a.writes) || (tableReach.get(a.table) ?? 0) - (tableReach.get(b.table) ?? 0) || a.table.name.localeCompare(b.table.name))[0];
+  /** The first function the handler hands off to that isn't plumbing. */
+  const firstFn = (e: Entry) => flatten(e.trace.flow).find((n) => !shared.has(nodeKey(n)) && n.path !== e.path && fileOf.get(n.path)?.role === "source");
+
+  const parent = new Map<string, string>(entries.map((e) => [e.key, e.key]));
+  const find = (k: string): string => (parent.get(k) === k ? k : find(parent.get(k)!));
+  const union = (a: string, b: string) => {
+    const [x, y] = [find(a), find(b)].sort();
+    if (x !== y) parent.set(y!, x!);
+  };
+  const byTable = new Map<Table, Entry[]>();
+  for (const e of entries) {
+    const p = primary(e);
+    if (p) byTable.set(p.table, [...(byTable.get(p.table) ?? []), e]);
+  }
+  for (const list of byTable.values()) for (const e of list.slice(1)) union(list[0]!.key, e.key);
+  const actionsOf = new Map<string, Entry[]>();
+  for (const e of entries) {
+    // A gateway alias runs an action: it belongs with that action's service.
+    const svc = e.action?.service ?? (e.route?.handler?.startsWith("svc:") ? e.route.handler.slice(4, e.route.handler.lastIndexOf(".")) : undefined);
+    if (svc) actionsOf.set(svc, [...(actionsOf.get(svc) ?? []), e]);
+  }
+  for (const list of actionsOf.values()) for (const e of list.slice(1)) union(list[0]!.key, e.key);
+  // Only entry points with no table and no service are grouped by the function they call: a helper two
+  // unrelated features both use (a role check) mustn't merge them.
+  const byFn = new Map<string, Entry[]>();
+  for (const e of entries) {
+    if (primary(e) || actionsOf.has(e.action?.service ?? "") || e.route?.handler?.startsWith("svc:")) continue;
+    const fn = firstFn(e);
+    if (fn) byFn.set(nodeKey(fn), [...(byFn.get(nodeKey(fn)) ?? []), e]);
+  }
+  for (const list of byFn.values()) for (const e of list.slice(1)) union(list[0]!.key, e.key);
+
+  const sets = new Map<string, Entry[]>();
+  for (const e of entries) sets.set(find(e.key), [...(sets.get(find(e.key)) ?? []), e]);
+
+  const groups: Group[] = [];
+  const other: Entry[] = [];
+  for (const members of sets.values()) {
+    const tableCount = new Map<Table, number>();
+    for (const e of members) {
+      const p = primary(e);
+      if (p) tableCount.set(p.table, (tableCount.get(p.table) ?? 0) + 1);
+    }
+    const table = [...tableCount].sort((a, b) => b[1] - a[1] || a[0].name.localeCompare(b[0].name))[0]?.[0];
+    const svc = [...actionsOf].find(([, l]) => l.some((e) => members.includes(e)))?.[0];
+    if (!table && !svc && members.length < 2) {
+      other.push(...members);
+      continue;
+    }
+    const fnCount = new Map<string, { n: CallNode; c: number }>();
+    for (const e of members) {
+      const f = firstFn(e);
+      if (f) fnCount.set(nodeKey(f), { n: f, c: (fnCount.get(nodeKey(f))?.c ?? 0) + 1 });
+    }
+    const fn = [...fnCount.values()].sort((a, b) => b.c - a.c || nodeKey(a.n).localeCompare(nodeKey(b.n)))[0]?.n;
+    const kind: FeatureKind = table ? "table" : svc ? "service" : "shared-code";
+    const name = table ? title(table.name) : svc ? title(svc.replace(/^v\d+\./, "")) : commonPath(members) ?? title(fn?.name.split(".").pop() ?? members[0]!.label);
+    const why = table
+      ? `${members.length === 1 ? "This entry point uses" : `These ${members.length} entry points all use`} the \`${table.name}\` table${tableCount.size > 1 ? " (or a table used alongside it)" : ""} before any other.`
+      : svc
+        ? `The actions of the Moleculer service \`${svc}\`${members.some((e) => e.route) ? ", and the gateway routes that run them" : ""}.`
+        : `These ${members.length} entry points all call \`${fn?.name}\` (${fn?.path}:${fn?.line}).`;
+    groups.push({ id: "", name, kind, why, entries: members.sort((a, b) => a.label.localeCompare(b.label)), ...(table ? { table } : {}), ...(fn ? { fn } : {}) });
+  }
+  groups.sort((a, b) => b.entries.length - a.entries.length || a.name.localeCompare(b.name));
+  // Two features can end up with the same label (a table and a service both called "users"): number them.
+  const taken = new Map<string, number>();
+  for (const gr of groups) {
+    const base = slug(gr.name);
+    const n = (taken.get(base) ?? 0) + 1;
+    taken.set(base, n);
+    gr.id = n === 1 ? base : `${base}-${n}`;
+    if (n > 1) gr.name = `${gr.name} (${n})`;
+  }
+  const primaries = new Map<string, Use>();
+  for (const e of entries) {
+    const p = primary(e);
+    if (p) primaries.set(e.key, p);
+  }
+  return { tables, entries, shared, groups, other: other.sort((a, b) => a.label.localeCompare(b.label)), primary: primaries };
 }
 
-export async function listFeatures(index: Index): Promise<FeatureSummary[]> {
-  const { groups } = await groupsOf(index);
-  return groups
-    .map((g) => {
-      const files = filesAbout(index, g.key).length;
-      const score = g.tables.length * 3 + g.routes.length + g.services.reduce((n, s) => n + s.actions.length, 0) + Math.min(files, 4);
-      return { g, files, score };
-    })
-    .filter(({ g, files }) => g.tables.length || g.services.length || g.routes.length >= 2 || (g.routes.length && files))
-    .sort((a, b) => b.score - a.score || a.g.key.localeCompare(b.g.key))
-    .slice(0, 60)
-    .map(({ g, files }) => ({ id: idOf(g.key), name: title(pickName(g)), routes: g.routes.length, tables: g.tables.map((t) => t.name), files, kind: g.services.length ? ("service" as const) : ("resource" as const) }));
+/** The deepest path segment every route shares, for naming a group of routes ("/api/billing/…" → "Billing"). */
+function commonPath(members: Entry[]): string | undefined {
+  const paths = members.filter((e) => e.route).map((e) => segments(e.route!.path).filter((s) => s !== "*" && !/^(api|v\d+)$/i.test(s)));
+  if (paths.length < members.length || !paths.length) return undefined;
+  let i = 0;
+  while (paths.every((p) => p[i] !== undefined && p[i] === paths[0]![i])) i++;
+  return i ? title(paths[0]![i - 1]!) : undefined;
 }
 
-/** The plural, as the code spells it: "comments" over "comment". */
-function pickName(g: Group): string {
-  const names = [...g.names];
-  return names.find((n) => /s$/i.test(n)) ?? names[0] ?? g.key;
+const fileCount = (gr: Group, shared: Set<string>) => new Set(gr.entries.flatMap((e) => [e.path, ...[...e.reached].filter((k) => !shared.has(k)).map((k) => k.slice(0, k.lastIndexOf("#")))])).size;
+
+export async function listFeatures(index: Index, g: Graph): Promise<FeatureList> {
+  const a = await analyse(index, g);
+  return {
+    features: a.groups.map((gr) => ({ id: gr.id, name: gr.name, kind: gr.kind, entries: gr.entries.length, tables: gr.table ? [gr.table.name] : [], files: fileCount(gr, a.shared) })),
+    other: a.other.map((e) => ({ label: e.label, path: e.path, line: e.line })),
+  };
 }
 
 // ---------- the walkthrough
@@ -275,7 +507,7 @@ function pickName(g: Group): string {
 const ACCESS = /auth|access|permission|role|guard|require|login|session|owner|admin|can[A-Z]|allowed/i;
 const VALIDATE = /^(z\.|.*\.parse$|.*parse$|validate|.*Schema|check[A-Z])/;
 
-async function code(index: Index, path: string, keyLines: number[], options: { lead?: number; max?: number } = {}): Promise<CodeLine[]> {
+async function code(index: Index, path: string, keyLines: number[], options: { lead?: number | undefined; max?: number } = {}): Promise<CodeLine[]> {
   const f = index.files.find((x) => x.path === path);
   const lines = f ? await readIndexed(index, f) : await readRaw(index, path);
   if (!lines) return [];
@@ -288,143 +520,147 @@ async function code(index: Index, path: string, keyLines: number[], options: { l
 
 const enclosing = (f: FileFacts | undefined, line: number) => f?.symbols.filter((s) => s.line <= line && s.endLine >= line && s.kind !== "module").sort((a, b) => a.endLine - a.line - (b.endLine - b.line))[0];
 const short = (p: string) => p.split("/").slice(-2).join("/");
-const nodes = (flow: CallNode[]): CallNode[] => flow.flatMap((n) => [n, ...nodes(n.children)]);
+const lastName = (n: string) => n.split(".").pop()!;
+
+function findGroup(a: Analysis, idOrName: string): Group | undefined {
+  const q = idOrName.trim().toLowerCase();
+  return a.groups.find((x) => x.id === q) ?? a.groups.find((x) => x.name.toLowerCase() === q) ?? a.groups.find((x) => x.id === slug(q)) ?? a.groups.find((x) => x.table?.name.toLowerCase() === q || x.table?.symbol.toLowerCase() === q);
+}
 
 export async function explainFeature(index: Index, g: Graph, idOrName: string, risks: Risk[] = []): Promise<Feature | undefined> {
-  const { groups } = await groupsOf(index);
-  const key = nounKey(idOrName.replace(/-/g, " "));
-  const group = groups.find((x) => x.key === key) ?? groups.find((x) => x.key.includes(key) || key.includes(x.key));
+  const a = await analyse(index, g);
+  const group = findGroup(a, idOrName);
   if (!group) return undefined;
   const fileOf = (p: string) => index.files.find((f) => f.path === p);
-  const about = filesAbout(index, group.key);
+  const table = group.table;
+  const primaryOf = (e: Entry) => a.primary.get(e.key);
+  const useOf = (e: Entry) => (table ? e.uses.filter((u) => u.table === table && !u.chain.some((n) => a.shared.has(nodeKey(n)))).sort((x, y) => x.depth - y.depth)[0] : undefined);
+
+  // The main path: one the browser calls, that writes the table, preferring POST; then by label so it's stable.
+  const score = (e: Entry) => (table && primaryOf(e)?.table === table ? 8 : 0) + (e.trace.callers.some((c) => sameRoute(segments(c.label.slice(c.label.indexOf(" ") + 1)), segments(e.route?.path ?? ""))) ? 4 : 0) + (useOf(e)?.writes ? 2 : 0) + (e.route?.method === "POST" ? 1 : 0);
+  const main = [...group.entries].sort((x, y) => score(y) - score(x) || x.label.localeCompare(y.label))[0]!;
+  const use = useOf(main);
   const steps: FeatureStep[] = [];
   const visited = new Set<string>();
-  const routeLabel = (r: RouteAt) => `${r.method} ${r.servicePath && !r.path ? r.servicePath : r.path}`;
 
-  // The main path: the create route if the browser calls it, else any route the browser calls, else the first.
-  const traced = group.routes.map((r) => ({ r, t: trace(index, g, { kind: "route", label: routeLabel(r), path: r.file, line: r.line, route: r }, { depth: 2 }) }));
-  const rank = (x: (typeof traced)[number]) => (x.t.callers.length ? 2 : 0) + (x.r.method === "POST" ? 1 : 0) + (mentions(x.r.file, group.key) ? 0.5 : 0);
-  const main = [...traced].sort((a, b) => rank(b) - rank(a))[0];
-  const serviceOf = (x: (typeof traced)[number]) => {
-    const all = nodes(x.t.flow).filter((n) => n.path !== x.r.file && fileOf(n.path)?.role === "source");
-    return all.find((n) => mentions(n.path, group.key)) ?? all.find((n) => /servic|model|repo|store|db|dao|handler|action|controller|logic/i.test(n.path)) ?? all[0];
+  // Screen and client: the call that hits the route, and the screen that shows the component making it.
+  // The caller whose path spells out most of the route's own segments, so `"/api/pages/" + id` doesn't beat `/api/pages/${id}/comments`.
+  const routeSegs = main.route ? segments(main.route.path) : [];
+  const exactness = (label: string) => {
+    const cs = segments(label.slice(label.indexOf(" ") + 1));
+    return (cs.length === routeSegs.length ? 100 : 0) + cs.filter((x, i) => x !== "*" && x === routeSegs[i]).length;
   };
-  const table = group.tables[0];
-  let service: CallNode | undefined;
-
-  if (main) {
-    const r = main.r;
-    // Screen: the client call, and the screen that shows the component making it.
-    const caller = [...main.t.callers].sort((a, b) => Number(mentions(b.path, group.key)) - Number(mentions(a.path, group.key)))[0];
-    if (caller) {
-      const cf = fileOf(caller.path);
-      const comp = enclosing(cf, caller.line);
-      const compName = comp?.parent && comp.kind === "method" ? comp.parent : comp?.name;
-      // A component's own name is often only its file's default export; the file name says it as well.
-      const shownAs = compName && /^[A-Z]/.test(compName) ? compName : basename(caller.path, extname(caller.path));
-      for (const p of g.in.get(caller.path) ?? []) {
-        const pf = fileOf(p);
-        const site = pf?.callSites.find(([ref]) => ref === shownAs);
-        if (pf && site && pf.role === "source") {
-          steps.push({ layer: "screen", title: `${basename(p, extname(p))} shows ${shownAs}`, path: p, line: site[1], detail: `Where you find it in the app.`, code: await code(index, p, [site[1]]) });
-          visited.add(p);
-          break;
-        }
+  const caller = [...main.trace.callers].sort((x, y) => exactness(y.label) - exactness(x.label) || x.path.localeCompare(y.path) || x.line - y.line)[0];
+  if (caller) {
+    const cf = fileOf(caller.path);
+    const comp = enclosing(cf, caller.line);
+    const compName = comp?.parent && comp.kind === "method" ? comp.parent : comp?.name;
+    // A component's own name is often only its file's default export; the file name says it as well.
+    const shownAs = compName && /^[A-Z]/.test(compName) ? compName : basename(caller.path, extname(caller.path));
+    for (const p of compName && /^[A-Z]/.test(compName) ? [...(g.in.get(caller.path) ?? [])].sort() : []) {
+      const pf = fileOf(p);
+      const site = pf?.callSites.find(([ref]) => ref === shownAs);
+      if (pf && site && pf.role === "source") {
+        steps.push({ layer: "screen", title: `${basename(p, extname(p))} shows ${shownAs}`, path: p, line: site[1], detail: "Where you find it in the app.", code: await code(index, p, [site[1]]) });
+        visited.add(p);
+        break;
       }
-      steps.push({
-        layer: "client",
-        title: `${shownAs} sends ${routeLabel(r)}`,
-        path: caller.path,
-        line: caller.line,
-        detail: comp ? `In ${comp.name}${comp.kind === "function" || comp.kind === "method" ? "()" : ""}.` : undefined,
-        code: await code(index, caller.path, [caller.line], { lead: comp && caller.line - comp.line < 40 ? comp.line : undefined }),
-      } as FeatureStep);
-      visited.add(caller.path);
     }
-    // Route: the handler, with its access checks and validation called out.
-    const rf = fileOf(r.file);
-    service = serviceOf(main);
-    const range = (() => {
-      const spans = (rf?.spans ?? []).filter(([a, b]) => a <= r.line && b >= r.line).sort((x, y) => x[1] - x[0] - (y[1] - y[0]))[0];
-      return spans ? { from: spans[0], to: spans[1] } : { from: r.line, to: r.line + 25 };
-    })();
-    const sites = (rf?.callSites ?? []).filter(([, l]) => l >= range.from && l <= range.to);
-    const access = sites.filter(([ref]) => ACCESS.test(ref.split(".").pop() ?? ""));
-    const validate = sites.filter(([ref]) => VALIDATE.test(ref));
-    const svcLine = service ? sites.find(([ref]) => ref.split(".").pop() === service!.name.split(".").pop())?.[1] : undefined;
-    const notes = [access.length ? `checks who you are with ${[...new Set(access.map(([x]) => `\`${x.split(".").pop()}\``))].slice(0, 2).join(" and ")}` : "", validate.length ? "validates the input" : "", service ? `calls \`${service.name}\`` : ""].filter(Boolean);
     steps.push({
-      layer: "route",
-      title: `${short(r.file)} handles ${routeLabel(r)}`,
-      path: r.file,
-      line: r.line,
-      detail: notes.length ? `It ${notes.join(", ").replace(/, ([^,]*)$/, " and $1")}.` : undefined,
-      code: await code(index, r.file, [access[0]?.[1], validate[0]?.[1], svcLine].filter((x): x is number => Boolean(x)), { lead: r.line }),
-    } as FeatureStep);
-    visited.add(r.file);
+      layer: "client",
+      title: `${shownAs} sends ${main.label}`,
+      path: caller.path,
+      line: caller.line,
+      detail: comp ? `In ${comp.name}${comp.kind === "function" || comp.kind === "method" ? "()" : ""}.` : undefined,
+      code: await code(index, caller.path, [caller.line], { lead: comp && caller.line - comp.line < 40 ? comp.line : undefined }),
+    });
+    visited.add(caller.path);
   }
 
-  // Service: the function doing the work. Without routes (a Moleculer service, a table only), its own code.
-  const svcFile = service ? fileOf(service.path) : undefined;
-  const svcSym = service ? svcFile?.symbols.find((s) => s.line === service!.line) : undefined;
-  if (service && svcFile && svcSym) {
-    const body = await readIndexed(index, svcFile);
-    const uses = table && body ? body.map((l, i) => (i + 1 >= svcSym.line && i + 1 <= svcSym.endLine && new RegExp(`\\b${table.symbol}\\b`).test(l) ? i + 1 : 0)).filter(Boolean) : [];
-    const throws = svcFile.throws.filter((t) => t.line >= svcSym.line && t.line <= svcSym.endLine).map((t) => t.line);
+  // The route or action: its access checks, validation, and the call that hands off the work.
+  const mf = fileOf(main.path);
+  const range = main.route ? routeRange(index, main.route) : main.action ? { from: main.action.symbol.line, to: main.action.symbol.endLine } : undefined;
+  const sites = range ? (mf?.callSites ?? []).filter(([, l]) => l >= range.from && l <= range.to) : [];
+  const access = sites.filter(([ref]) => ACCESS.test(lastName(ref)));
+  const validate = sites.filter(([ref]) => VALIDATE.test(ref));
+  const chain = use ? use.chain : group.fn ? pathTo(main.trace.flow, nodeKey(group.fn)) : [];
+  const handOff = chain[0];
+  const handOffLine = handOff ? sites.find(([ref]) => lastName(ref) === lastName(handOff.name))?.[1] : undefined;
+  const notes = [access.length ? `checks who you are with ${[...new Set(access.map(([x]) => `\`${lastName(x)}\``))].slice(0, 2).join(" and ")}` : "", validate.length ? "validates the input" : "", handOff ? `calls \`${handOff.name}\`` : "", use?.depth === 0 ? `${use.writes ? "writes" : "reads"} the \`${use.table.name}\` table itself` : ""].filter(Boolean);
+  steps.push({
+    layer: "route",
+    title: `${short(main.path)} handles ${main.label}`,
+    path: main.path,
+    line: main.line,
+    detail: notes.length ? `It ${notes.join(", ").replace(/, ([^,]*)$/, " and $1")}.` : undefined,
+    code: await code(index, main.path, [access[0]?.[1], validate[0]?.[1], handOffLine, use?.depth === 0 ? use.line : undefined].filter((x): x is number => Boolean(x)), { lead: main.line }),
+  });
+  visited.add(main.path);
+
+  // Each function on the way to the table (or to the shared function), at most three.
+  const hops = chain.length > 3 ? [chain[0]!, ...chain.slice(-2)] : chain;
+  for (const [i, n] of hops.entries()) {
+    const nf = fileOf(n.path);
+    const sym = nf?.symbols.find((s) => s.line === n.line);
+    if (!nf || !sym) continue;
+    const last = i === hops.length - 1;
+    const next = hops[i + 1];
+    const keyLines = [
+      ...(last && use ? [use.line] : []),
+      ...(next ? nf.callSites.filter(([ref, l]) => l >= sym.line && l <= sym.endLine && lastName(ref) === lastName(next.name)).map(([, l]) => l).slice(0, 1) : []),
+      ...nf.throws.filter((t) => t.line >= sym.line && t.line <= sym.endLine).map((t) => t.line).slice(0, 2),
+    ];
+    const throws = nf.throws.filter((t) => t.line >= sym.line && t.line <= sym.endLine).length;
     steps.push({
       layer: "service",
-      title: `${service.name} does the work`,
-      path: service.path,
-      line: service.line,
-      detail: [svcSym.doc ? svcSym.doc.split(/(?<=\.)\s/)[0] : "", throws.length ? `Fails with an error in ${throws.length} case${throws.length === 1 ? "" : "s"}.` : ""].filter(Boolean).join(" ") || undefined,
-      code: await code(index, service.path, [...uses.slice(0, 3), ...throws.slice(0, 2)], { lead: svcSym.line }),
-    } as FeatureStep);
-    visited.add(service.path);
-  } else if (!main && group.services.length) {
-    const s = group.services[0]!;
-    const a = s.actions[0]!;
-    steps.push({ layer: "service", title: `The ${s.name} service`, path: s.path, line: a.line, detail: `Actions: ${s.actions.map((x) => x.name).join(", ")}.`, code: await code(index, s.path, s.actions.slice(0, 5).map((x) => x.line)) });
-    visited.add(s.path);
+      title: last && use ? `${n.name} ${use.writes ? "writes" : "reads"} ${use.table.name}` : next ? `${n.name} passes it on` : `${n.name} does the work`,
+      path: n.path,
+      line: n.line,
+      detail: [sym.doc ? sym.doc.split(/(?<=\.)\s/)[0] : "", throws ? `Fails with an error in ${throws} case${throws === 1 ? "" : "s"}.` : "", n.byName ? "Matched by name only: no import says which function this is." : "", hops.length < chain.length && i === 0 ? `${chain.length - hops.length} more call${chain.length - hops.length === 1 ? "" : "s"} in between.` : ""].filter(Boolean).join(" ") || undefined,
+      code: await code(index, n.path, keyLines, { lead: sym.line }),
+    });
+    visited.add(n.path);
   }
 
-  // Data: the table and its columns.
+  // The table and its columns.
   if (table) {
     steps.push({ layer: "data", title: `Stored in the ${table.name} table`, path: table.path, line: table.line, detail: table.fields.length ? `Columns: ${table.fields.join(", ")}.` : undefined, code: await code(index, table.path, [table.line]) });
     visited.add(table.path);
   }
 
-  // Every route, and where each one ends up.
-  const actions = traced.map((x) => {
-    const s = serviceOf(x);
-    return { label: routeLabel(x.r), path: x.r.file, line: x.r.line, ...(s ? { does: { name: s.name, path: s.path, line: s.line } } : {}) };
+  // Every entry point, and the function where its work happens.
+  const actions: EntryPoint[] = group.entries.map((e) => {
+    const u = useOf(e);
+    const d = u?.chain.at(-1) ?? flatten(e.trace.flow).find((n) => !a.shared.has(nodeKey(n)) && n.path !== e.path);
+    return { label: e.label, path: e.path, line: e.line, ...(d ? { does: { name: d.name, path: d.path, line: d.line } } : {}) };
   });
-  for (const s of group.services) for (const a of s.actions) if (!actions.some((x) => x.does?.line === a.line && x.does.path === s.path)) actions.push({ label: `action ${s.name}.${a.name}`, path: s.path, line: a.line });
 
-  // Other ways in: code that calls the same service function without going through the route.
+  // Other ways in: code that imports the working function's file and calls it, outside any route.
+  const target = chain.at(-1);
   const otherWays: Feature["otherWays"] = [];
-  if (service) {
-    const fn = service.name.split(".").pop()!;
-    for (const f of sourceFiles(index)) {
-      if (f.path === service.path || f.path === main?.r.file) continue;
-      if (!(g.out.get(f.path) ?? new Set()).has(service.path)) continue;
-      const site = f.callSites.find(([ref]) => ref === fn || ref.endsWith(`.${fn}`));
-      if (site) otherWays.push({ label: `${short(f.path)} calls ${fn}`, path: f.path, line: site[1] });
+  if (target) {
+    const fn = lastName(target.name);
+    for (const p of [...(g.in.get(target.path) ?? [])].sort()) {
+      const f = fileOf(p);
+      if (!f || f.role !== "source" || group.entries.some((e) => e.path === p)) continue;
+      const site = f.callSites.find(([ref]) => lastName(ref) === fn);
+      if (site) otherWays.push({ label: `${short(p)} calls ${fn}`, path: p, line: site[1] });
     }
   }
 
-  // Tests: named after the feature, calling its service, or hitting its routes.
-  const testFiles = index.files.filter((f) => f.role === "test");
-  const fnNames = new Set(actions.flatMap((a) => (a.does ? [a.does.name.split(".").pop()!] : [])));
-  const routeBits = [...new Set(group.routes.map((r) => segments(r.path).filter((s) => s !== "*").slice(-1)[0]).filter(Boolean))] as string[];
+  // Tests: those that call the feature's functions, or request its routes.
+  const fnNames = new Set(actions.flatMap((x) => (x.does ? [lastName(x.does.name)] : [])));
+  const routePaths = group.entries.flatMap((e) => (e.route ? [segments(e.route.path)] : []));
   const tests: string[] = [];
-  for (const f of testFiles) {
-    if (mentions(f.path, group.key) || f.calls.some((c) => fnNames.has(c.split(".").pop()!))) {
+  for (const f of index.files.filter((x) => x.role === "test").sort((x, y) => x.path.localeCompare(y.path))) {
+    if (f.calls.some((c) => fnNames.has(lastName(c)))) {
       tests.push(f.path);
       continue;
     }
-    if (!routeBits.length) continue;
+    if (!routePaths.length) continue;
     const lines = await readIndexed(index, f);
-    if (lines && routeBits.some((b) => lines.some((l) => l.includes(`/${b}`)))) tests.push(f.path);
+    const hits = lines?.some((l) => [...l.matchAll(/["'`](\/[^"'`\s]*)["'`]/g)].some((m) => routePaths.some((rp) => sameRoute(segments(m[1]!), rp))));
+    if (hits) tests.push(f.path);
   }
 
   // Where to change it, in the order you'd touch the layers.
@@ -435,43 +671,49 @@ export async function explainFeature(index: Index, g: Graph, idOrName: string, r
   if (table) {
     add(table.path, `the ${table.name} table's columns`, table.line);
     const migrations = index.files.filter((f) => f.role === "migration");
-    if (migrations.length) add(migrations.map((m) => m.path).sort().at(-1)!.replace(/[^/]*$/, ""), "a new migration (generate it with your ORM)");
+    const latest = migrations.map((m) => m.path).filter((x) => !/\.json$/.test(x)).sort().at(-1);
+    if (latest) add(dirname(latest) + "/", "a new migration (generate it with your ORM)");
   }
-  if (service) add(service.path, `${service.name} and its neighbours`, service.line);
-  if (main) add(main.r.file, "the route: input checks and access", main.r.line);
-  // The type the client code uses for it (`interface Comment`).
-  const typeName = group.key.split(" ").map((w) => w[0]!.toUpperCase() + w.slice(1)).join("");
-  for (const f of sourceFiles(index)) {
-    const t = f.symbols.find((s) => (s.kind === "interface" || s.kind === "type" || s.kind === "class") && s.name === typeName);
-    if (t && f.path !== table?.path) add(f.path, `the ${typeName} type`, t.line);
-  }
+  if (target) add(target.path, `${target.name} and its neighbours`, target.line);
+  add(main.path, main.route ? "the route: input checks and access" : "the action", main.line);
   for (const s of steps) if (s.layer === "client" || s.layer === "screen") add(s.path, s.layer === "client" ? "the screen's code" : "where the screen is shown", s.line);
 
-  const featureFiles = new Set([...visited, ...change.map((c) => c.path), ...about.map((f) => f.path)]);
+  const featureFiles = new Set([...visited, ...change.map((c) => c.path), ...group.entries.map((e) => e.path)]);
   const watchOut = risks
     .filter((r) => ["swallowed-error", "missing-route", "cycle", "duplicate", "untested", "todo", "env-undocumented", "long-function"].includes(r.kind) && r.locations.some((l) => featureFiles.has(l.path)))
     .slice(0, 5)
-    .map((r) => ({ title: r.title, path: r.locations.find((l) => featureFiles.has(l.path))!.path, ...(r.locations[0]?.line ? { line: r.locations.find((l) => featureFiles.has(l.path))!.line } : {}) }));
+    .map((r) => {
+      const at = r.locations.find((l) => featureFiles.has(l.path))!;
+      return { title: r.title, path: at.path, ...(at.line ? { line: at.line } : {}) };
+    });
+
+  // What the main path couldn't follow, so nobody mistakes a short walkthrough for the whole story.
+  const gaps = [...(main.trace.note ? [main.trace.note] : []), ...(!use && !group.fn && main.trace.calls.unresolved.length ? [`Couldn't follow ${main.trace.calls.unresolved.slice(0, 6).map((x) => `\`${x}\``).join(", ")} from ${main.path}:${main.line}: dynamic calls, injected services or values of unknown type.`] : [])];
+
+  const related = group.entries
+    .flatMap((e) => e.trace.callers.filter((c) => sameRoute(segments(c.label.slice(c.label.indexOf(" ") + 1)), segments(e.route?.path ?? ""))).map((c) => ({ ...c, label: `${basename(c.path)} calls ${e.label}` })))
+    .filter((c, i, all) => !visited.has(c.path) && all.findIndex((x) => x.path === c.path && x.line === c.line) === i)
+    .sort((x, y) => x.path.localeCompare(y.path) || x.line - y.line)
+    .slice(0, 12);
 
   const client = steps.find((s) => s.layer === "client");
   const screen = steps.find((s) => s.layer === "screen");
   const summary = [
-    client ? `${client.title.replace(/ sends .*/, "")}${screen ? ` (shown in ${basename(screen.path, extname(screen.path))})` : ""} sends \`${main ? routeLabel(main.r) : ""}\`.` : main ? `\`${routeLabel(main.r)}\` is the main entry point.` : "",
-    main ? `${short(main.r.file)} handles it${service ? ` and calls \`${service.name}\` in ${short(service.path)}` : ""}${table ? `, which works with the \`${table.name}\` table` : ""}.` : "",
-    !main && group.services.length ? `A Moleculer service with ${group.services[0]!.actions.length} actions.` : "",
-    !main && !group.services.length && table ? `A \`${table.name}\` table (${table.orm}) with ${table.fields.length} columns.` : "",
-    group.routes.length > 1 ? `${group.routes.length} routes in all.` : "",
+    client ? `${client.title.replace(/ sends .*/, "")}${screen ? ` (shown in ${basename(screen.path, extname(screen.path))})` : ""} sends \`${main.label}\`.` : `\`${main.label}\` is the main entry point.`,
+    `${short(main.path)} handles it${target ? ` and ${chain.length > 1 ? "through " + (chain.length - 1) + " call" + (chain.length > 2 ? "s" : "") + " reaches" : "calls"} \`${target.name}\` in ${short(target.path)}` : ""}${use ? `, which ${use.writes ? "writes" : "reads"} the \`${use.table.name}\` table` : ""}.`,
+    group.entries.length > 1 ? `${group.entries.length} entry points in all.` : "",
   ]
     .filter(Boolean)
     .join(" ");
 
   return {
-    id: idOf(group.key),
-    name: title(pickName(group)),
-    kind: group.services.length ? "service" : "resource",
-    routes: group.routes.length,
-    tables: group.tables.map((t) => t.name),
-    files: about.length,
+    id: group.id,
+    name: group.name,
+    kind: group.kind,
+    entries: group.entries.length,
+    tables: table ? [table.name] : [],
+    files: fileCount(group, a.shared),
+    why: group.why,
     summary,
     steps,
     actions,
@@ -479,30 +721,48 @@ export async function explainFeature(index: Index, g: Graph, idOrName: string, r
     change,
     tests: tests.slice(0, 8),
     watchOut,
-    related: about.map((f) => f.path).filter((p) => !visited.has(p) && !change.some((c) => c.path === p)).slice(0, 12),
+    gaps,
+    related,
   };
 }
 
+/** The chain of calls from the top of a flow down to the node with this key. */
+function pathTo(flow: CallNode[], key: string): CallNode[] {
+  for (const n of flow) {
+    if (nodeKey(n) === key) return [n];
+    const below = pathTo(n.children, key);
+    if (below.length) return [n, ...below];
+  }
+  return [];
+}
+
+const sameRoute = (a: string[], b: string[]) => a.length === b.length && a.every((s, i) => s === b[i] || s === "*" || b[i] === "*");
+
 // ---------- text, for the CLI and MCP
 
-export function formatFeatures(list: FeatureSummary[]): string {
-  if (!list.length) return "No features found: no database tables, API routes or services Spelunk recognises. Try overview and where instead.";
-  return [`${list.length} features (from database tables, API routes and services). Use explain_feature with a name for its walkthrough.`, "", ...list.map((f) => `${f.name.padEnd(28)} ${[f.routes ? `${f.routes} route${f.routes === 1 ? "" : "s"}` : "", f.tables.length ? `table ${f.tables.join(", ")}` : "", f.files ? `${f.files} file${f.files === 1 ? "" : "s"}` : "", f.kind === "service" ? "service" : ""].filter(Boolean).join(" · ")}`)].join("\n");
+export function formatFeatures(list: FeatureList): string {
+  const { features, other } = list;
+  if (!features.length && !other.length) return "No features found: Spelunk found no server routes or Moleculer actions. Try overview and where instead.";
+  const out = [`${features.length} features, grouped by the table or code their routes reach. Use explain_feature with a name for its walkthrough.`, ""];
+  for (const f of features) out.push(`${f.name.padEnd(28)} ${[`${f.entries} entry point${f.entries === 1 ? "" : "s"}`, f.tables.length ? `table ${f.tables.join(", ")}` : f.kind === "service" ? "Moleculer service" : "shared code", `${f.files} file${f.files === 1 ? "" : "s"}`].join(" · ")}`);
+  if (other.length) out.push("", `Other entry points (${other.length}), which share no table or function with another:`, ...other.slice(0, 40).map((e) => `  ${e.label}  ${e.path}:${e.line}`), ...(other.length > 40 ? [`  … and ${other.length - 40} more`] : []));
+  return out.join("\n");
 }
 
 export function formatFeature(f: Feature): string {
-  const out = [`# How ${f.name.toLowerCase()} work${f.name.endsWith("s") ? "" : "s"}`, "", f.summary, ""];
+  const out = [`# ${f.name}`, "", f.summary, "", `Grouped because: ${f.why}`, ""];
   f.steps.forEach((s, i) => {
     out.push(`${i + 1}. [${s.layer}] ${s.title}  ${s.path}:${s.line}`);
     if (s.detail) out.push(`   ${s.detail}`);
     for (const c of s.code) out.push(`${c.gap ? "   …\n" : ""}   ${String(c.line).padStart(5)}${c.hl ? " >" : "  "} ${c.text}`);
     out.push("");
   });
-  if (f.actions.length) out.push("Actions:", ...f.actions.map((a) => `  ${a.label}  ${a.path}:${a.line}${a.does ? ` → ${a.does.name} (${a.does.path}:${a.does.line})` : ""}`), "");
+  if (f.gaps.length) out.push("Couldn't follow:", ...f.gaps.map((x) => `  ${x}`), "");
+  if (f.actions.length) out.push("Entry points:", ...f.actions.map((a) => `  ${a.label}  ${a.path}:${a.line}${a.does ? ` → ${a.does.name} (${a.does.path}:${a.does.line})` : ""}`), "");
   if (f.otherWays.length) out.push("Other ways in:", ...f.otherWays.map((o) => `  ${o.label}  ${o.path}:${o.line}`), "");
   if (f.change.length) out.push("To change it:", ...f.change.map((c) => `  ${c.path}${c.line ? `:${c.line}` : ""}  ${c.why}`), "");
   if (f.tests.length) out.push("Tests:", ...f.tests.map((t) => `  ${t}`), "");
   if (f.watchOut.length) out.push("Watch out:", ...f.watchOut.map((w) => `  ${w.title}  ${w.path}${w.line ? `:${w.line}` : ""}`), "");
-  if (f.related.length) out.push(`Also about ${f.name.toLowerCase()}: ${f.related.join(", ")}`);
+  if (f.related.length) out.push("Also calling these routes:", ...f.related.map((r) => `  ${r.path}:${r.line}  ${r.label}`));
   return out.join("\n").trim();
 }

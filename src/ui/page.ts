@@ -39,6 +39,32 @@ nav.side { border-right: 1px solid var(--line); padding: 14px 10px; overflow-y: 
 .navb:hover { background: var(--accent-soft); color: var(--ink); }
 .navb[aria-current="page"] { background: var(--accent-soft); color: var(--accent-ink); font-weight: 600; }
 .navb .n { margin-left: auto; font: 11px var(--mono); }
+.navsec { margin: 16px 10px 6px; font: 600 11px/1.2 var(--body); letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.navb.sub { font-size: 13px; padding-top: 4px; padding-bottom: 4px; }
+:root { --f-ui: #3b6fb6; --f-api: #8a5cc2; --f-svc: #2f7a55; --f-db: #b7791f; }
+.fgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin: 18px 0 28px; }
+.fcard { text-align: left; cursor: pointer; }
+.fcard:hover { border-color: var(--accent); }
+.fcard p { margin: 0 0 8px; font-size: 13px; }
+.lane { display: flex; gap: 6px; margin: 0 0 18px; flex-wrap: wrap; }
+.lane span { font-size: 12px; padding: 3px 10px; border-radius: 99px; color: #fff; }
+.fwrap { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 18px; align-items: start; }
+.fstep { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 10px; margin-bottom: 12px; }
+.fnum { width: 28px; height: 28px; border-radius: 50%; color: #fff; display: grid; place-items: center; font-weight: 600; font-size: 13px; margin-top: 8px; }
+.fstep h3 { margin: 0; font-size: 14.5px; }
+.fstep .where { font: 12px var(--mono); color: var(--muted); margin: 2px 0 6px; display: flex; gap: 12px; flex-wrap: wrap; }
+.fstep p { margin: 0 0 8px; font-size: 13.5px; }
+.fcode { margin: 0; background: var(--code-bg); border: 1px solid var(--line); border-radius: 7px; padding: 8px 10px; font: 12px/1.55 var(--mono); overflow-x: auto; white-space: pre; }
+.fcode .ln { color: var(--muted); display: inline-block; width: 44px; user-select: none; }
+.fcode .hl { background: var(--medium-soft); display: inline-block; min-width: 100%; }
+.fcode .gap { color: var(--muted); }
+.fside .card { margin-bottom: 12px; }
+.fside h4 { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); }
+.fside ul { margin: 0; padding-left: 18px; font-size: 13px; }
+.fside .lnk { overflow-wrap: anywhere; }
+.fside li { margin-bottom: 4px; }
+.fside p { margin: 0; font-size: 13px; }
+@media (max-width: 1000px) { .fwrap { grid-template-columns: 1fr; } }
 .navhint { font-size: 12px; color: var(--muted); padding: 14px 10px 0; line-height: 1.45; }
 main { overflow-y: auto; padding: 24px clamp(16px, 3vw, 36px) 80px; min-width: 0; }
 .view { max-width: 1100px; }
@@ -256,6 +282,7 @@ let state = {}, report = null, view = "overview", riskKind = "";
 const VIEWS = [
   ["overview", "Overview", "M3 12h18M3 6h18M3 18h12"],
   ["tour", "First day", "M5 21V4m0 0h11l-2 4 2 4H5"],
+  ["features", "How it works", "M4 5h6v6H4zM14 5h6v6h-6zM4 15h6v4H4zM14 15h6v4h-6zM10 8h4M7 11v4M17 11v4"],
   ["find", "Find", "M11 19a8 8 0 1 1 5.3-14 8 8 0 0 1-5.3 14Zm10 2-4.3-4.3"],
   ["ask", "Ask", "M4 5h16v11H9l-5 4V5Zm5 5h.01M12 10h.01M15 10h.01"],
   ["trace", "Trace", "M4 6h6v4H4zM14 14h6v4h-6zM7 10v4a2 2 0 0 0 2 2h5"],
@@ -274,7 +301,61 @@ const icon = (d) => '<svg width="16" height="16" viewBox="0 0 24 24" fill="none"
 function renderNav() {
   const counts = { risks: report ? report.risks.reduce((n, g) => n + g.items.length, 0) : "", routes: report ? report.routes.length : "", config: report ? report.env.length : "" };
   $("#nav").innerHTML = VIEWS.filter(([id]) => (id !== "agents" || (state.braid && state.braid.here)) && !(state.hosted && id === "share")).map(([id, label, d]) => '<button class="navb" data-view="' + id + '"' + (view === id ? ' aria-current="page"' : "") + ">" + icon(d) + esc(label) + (counts[id] !== undefined && counts[id] !== "" ? '<span class="n">' + counts[id] + "</span>" : "") + "</button>").join("") +
+    featureNav() +
     '<p class="navhint">Click any <span class="mono" style="color:var(--accent-ink)">path:line</span> to read the code there.</p>';
+}
+
+// ---------- Features: how each part of the app works, from the screen down to the table
+let featureList = null, featureFor = null, featureId = "";
+const LAYERS = { screen: ["Screen", "var(--f-ui)"], client: ["Browser code", "var(--f-ui)"], route: ["Route", "var(--f-api)"], service: ["Function", "var(--f-svc)"], data: ["Database", "var(--f-db)"] };
+function loadFeatures() {
+  if (!report || featureFor === report) return featureList ? Promise.resolve(featureList) : featureLoading;
+  featureFor = report;
+  featureList = null;
+  featureLoading = api("/api/features").then((l) => { featureList = l; renderNav(); return l; }).catch(() => (featureList = { features: [], other: [] }));
+  return featureLoading;
+}
+let featureLoading = null;
+function featureNav() {
+  if (!report) return "";
+  if (featureFor !== report) { loadFeatures(); return ""; }
+  if (!featureList || !featureList.features.length) return "";
+  return '<h5 class="navsec">How each feature works</h5>' + featureList.features.slice(0, 30).map((f) => '<button class="navb sub" data-feature="' + esc(f.id) + '"' + (view === "features" && featureId === f.id ? ' aria-current="page"' : "") + ">" + esc(f.name) + '<span class="n">' + f.entries + "</span></button>").join("");
+}
+
+async function vFeatures(id) {
+  featureId = id || "";
+  renderNav();
+  if (id) return vFeature(id);
+  $("#main").innerHTML = '<div class="view empty"><span class="spinner"></span> Following every route to the tables it uses…</div>';
+  const l = await loadFeatures();
+  let h = '<div class="view wide"><h1>How it works</h1><p class="lede">What this app does, one feature at a time. Spelunk follows each route through the calls its code makes to the database table it reaches, and groups routes that reach the same table. File and function names play no part, so it works however the code is named. Pick a feature to walk through it from the screen to the database.</p>';
+  if (!l.features.length) h += '<p class="empty">Spelunk found no server routes or Moleculer actions that reach a database table. Try <button class="lnk" data-view="routes">Routes</button> or <button class="lnk" data-view="trace">Trace</button>.</p>';
+  else h += '<div class="fgrid">' + l.features.map((f) => '<button class="card fcard" data-feature="' + esc(f.id) + '"><h4>' + esc(f.name) + '</h4><p class="muted">' + f.entries + " route" + (f.entries === 1 ? "" : "s") + " · " + f.files + " file" + (f.files === 1 ? "" : "s") + "</p>" + (f.tables.length ? '<span class="tag">table ' + esc(f.tables.join(", ")) + "</span>" : '<span class="tag">' + (f.kind === "service" ? "Moleculer service" : "shared code") + "</span>") + "</button>").join("") + "</div>";
+  if (l.other.length) h += '<h2>Other entry points</h2><p class="muted">These don\'t share a table, a service or a function with any other route: health checks, static files, calls to outside services.</p><div class="tw"><table>' + l.other.map((e) => '<tr><td class="mono" style="font-size:12.5px">' + esc(e.label) + "</td><td>" + loc(e.path, e.line) + "</td><td>" + traceBtn(e.label, "trace") + "</td></tr>").join("") + "</table></div>";
+  $("#main").innerHTML = h + "</div>";
+}
+
+async function vFeature(id) {
+  $("#main").innerHTML = '<div class="view empty"><span class="spinner"></span> Walking through it…</div>';
+  const f = await api("/api/feature?id=" + encodeURIComponent(id));
+  const used = [...new Set(f.steps.map((s) => s.layer === "client" ? "screen" : s.layer))];
+  const codeHtml = (lines) => lines.length ? '<pre class="fcode">' + lines.map((c) => (c.gap ? '<span class="gap">…</span>\n' : "") + '<span class="' + (c.hl ? "hl" : "") + '"><span class="ln">' + c.line + "</span>" + esc(c.text) + "</span>").join("\n") + "</pre>" : "";
+  const steps = f.steps.map((s, i) => '<div class="fstep"><div class="fnum" style="background:' + LAYERS[s.layer][1] + '">' + (i + 1) + '</div><div class="card"><h3>' + esc(s.title) + '</h3><div class="where">' + loc(s.path, s.line) + ' <button class="lnk" data-readas="' + esc(s.path) + '" data-line="' + s.line + '">step through it</button></div>' + (s.detail ? "<p>" + prose(s.detail) + "</p>" : "") + codeHtml(s.code) + "</div></div>").join("");
+  const side = (title, body) => body ? '<div class="card"><h4>' + title + "</h4>" + body + "</div>" : "";
+  const list = (items) => items.length ? "<ul>" + items.join("") + "</ul>" : "";
+  const h = '<div class="view wide"><button class="lnk" data-view="features">← All features</button><h1 style="margin-top:10px">' + esc(f.name) + '</h1><p class="lede">' + prose(f.summary) + "</p>" +
+    '<div class="lane">' + used.map((l) => '<span style="background:' + LAYERS[l][1] + '">' + LAYERS[l][0] + "</span>").join("") + "</div>" +
+    '<div class="fwrap"><div>' + steps + (f.gaps.length ? '<div class="note">' + f.gaps.map((g) => "<p>" + prose(g) + "</p>").join("") + "</div>" : "") + '</div><div class="fside">' +
+    side("Why these belong together", "<p>" + prose(f.why) + "</p>") +
+    side("Every way in", list(f.actions.map((a) => "<li>" + traceBtn(a.label) + (a.does ? ' <span class="muted">→</span> ' + loc(a.does.path, a.does.line, a.does.name) : "") + "</li>"))) +
+    side("Also reached from", list(f.otherWays.map((o) => "<li>" + loc(o.path, o.line, o.label) + "</li>"))) +
+    side("To change it", list(f.change.map((c) => "<li>" + loc(c.path, c.line) + ' <span class="muted">' + esc(c.why) + "</span></li>"))) +
+    side("Tests", list(f.tests.map((t) => "<li>" + loc(t) + "</li>"))) +
+    side('Watch out <span class="tag">from the code</span>', list(f.watchOut.map((w) => "<li>" + esc(w.title) + " " + loc(w.path, w.line) + "</li>"))) +
+    side("Other code calling these routes", list(f.related.map((r) => "<li>" + loc(r.path, r.line, r.label) + "</li>"))) +
+    "</div></div></div>";
+  $("#main").innerHTML = h;
 }
 
 function go(v, arg) {
@@ -286,7 +367,7 @@ function go(v, arg) {
   if (!report) { main.innerHTML = '<div class="view empty"><span class="spinner"></span> Reading the repository…</div>'; return; }
   pathSet = null;
   clearTimeout(agentsTimer);
-  Promise.resolve(({ agents: vAgents, overview: vOverview, tour: vTour, find: vFind, ask: vAsk, trace: vTrace, error: vError, changes: vChanges, risks: vRisks, routes: vRoutes, debug: vDebug, config: vConfig, explain: vExplain, share: vShare })[v](arg)).catch((e) => { $("#main").innerHTML = '<div class="view"><div class="note err">' + esc(e.message) + "</div></div>"; });
+  Promise.resolve(({ agents: vAgents, overview: vOverview, tour: vTour, features: vFeatures, find: vFind, ask: vAsk, trace: vTrace, error: vError, changes: vChanges, risks: vRisks, routes: vRoutes, debug: vDebug, config: vConfig, explain: vExplain, share: vShare })[v](arg)).catch((e) => { $("#main").innerHTML = '<div class="view"><div class="note err">' + esc(e.message) + "</div></div>"; });
 }
 
 // ---------- Welcome & folder picker
@@ -1136,6 +1217,7 @@ document.addEventListener("click", async (e) => {
     if (d.findkindAll !== undefined) return document.querySelector('[data-findkind=""]').click();
     if (d.ask !== undefined) { $("#askq").value = d.ask; return startAsk(d.ask); }
     if (t.id === "clonego") return useLink();
+    if (d.feature !== undefined) return go("features", d.feature);
     if (d.view) return go(d.view);
     if (d.module !== undefined) return vModule(d.module);
     if (d.kind !== undefined) { riskKind = d.kind; return vRisks(); }
