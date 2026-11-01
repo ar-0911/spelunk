@@ -1,3 +1,4 @@
+import { explainFeature, formatFeature, formatFeatures, listFeatures } from "./analysis/features.js";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { readFileSync } from "node:fs";
@@ -50,7 +51,7 @@ const INSTRUCTIONS = `Spelunk has already indexed this repository (files, symbol
 
 - New repo: overview, then module for the part you need.
 - "Where is X": where (features, error text, routes, symbols). symbols for names.
-- "How does X work": trace (route, function or file), then source for just the function you need instead of the whole file.
+- "What does this app do / how does X work": features lists them (grouped by the tables their routes reach); explain_feature walks one end to end, screen to table. For one route or function, trace; then source for just the function you need instead of the whole file.
 - Before reading a file: file lists its symbols with line numbers; source shows one symbol or a line range.
 - Before changing something: dependents (who imports it) and trace (who calls it).
 - Errors and stack traces: lookup_error.`;
@@ -119,6 +120,37 @@ export function registerTools(server: McpServer, host: ToolHost): void {
       const out = targets.slice(0, 3).map((t) => formatTrace(trace(ws.index, ws.graph, t, { depth: depth ?? 2 })));
       if (targets.length > 3) out.push(`${targets.length - 3} more matches: ${targets.slice(3, 12).map((t) => `${t.path}${t.line ? `:${t.line}` : ""}`).join(", ")}`);
       return out.join("\n\n---\n\n");
+    }),
+  );
+
+  server.registerTool(
+    "features",
+    {
+      description:
+        "What the app does, as features: routes and Moleculer actions grouped by the database table (or service, or shared function) their code reaches, found from the call graph rather than file names. Use it to answer \"where do I start\" or \"how does X work\" in an unfamiliar repo, then explain_feature for one.",
+      inputSchema: repoArg,
+      annotations: readOnly,
+    },
+    withRepo(async (r) => {
+      const ws = await r.workspace();
+      return formatFeatures(await listFeatures(ws.index, ws.graph));
+    }),
+  );
+
+  server.registerTool(
+    "explain_feature",
+    {
+      description:
+        "How one feature works, end to end: the screen and client call, the route with its access checks, each function on the way, and the table it writes, with the key lines of code at each step and path:line. Also every entry point of the feature, other code that reaches it (jobs, MCP tools), where to make a change, its tests, and calls Spelunk couldn't follow.",
+      inputSchema: { ...repoArg, feature: z.string().min(1).describe('A feature name or id from the features tool, or a table name ("comments")') },
+      annotations: readOnly,
+    },
+    withRepo(async (r, { feature }: { feature: string }) => {
+      const ws = await r.workspace();
+      const f = await explainFeature(ws.index, ws.graph, feature, await ws.risks());
+      if (f) return formatFeature(f);
+      const { features } = await listFeatures(ws.index, ws.graph);
+      return `No feature "${feature}". Features: ${features.map((x) => x.id).join(", ") || "none found"}.`;
     }),
   );
 

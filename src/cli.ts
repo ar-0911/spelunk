@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { explainFeature, formatFeature, formatFeatures, listFeatures } from "./analysis/features.js";
 import { existsSync, readFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { dirname, join, relative, resolve } from "node:path";
@@ -34,6 +35,7 @@ Commands
   scan                 Index the repository (incremental; --full to start over)
   map                  Write the field guide: .spelunk/map.html, or SPELUNK.md with --format md
   where <words>        Find the code for a feature, error message, route or variable
+  features [name]      What the app does, grouped by the tables its routes reach; with a name, how it works end to end
   trace <target>       Follow a route ("POST /api/pages"), function or file: callers, calls, imports
   file <path>          Everything known about one file
   module <dir>         One module: files, dependencies, and Claude's summary if explained
@@ -66,7 +68,7 @@ Options
   --kind <kind>        risks: only this kind (e.g. swallowed-error, hotspot, orphan); where: symbol, file, route or env
   --limit <n>          where/risks: how many results
   --depth <n>          trace: how deep to follow calls (default 2)
-  --json               Print JSON instead of text (where, trace, risks, error, impact, tour, ask, overview, agents)
+  --json               Print JSON instead of text (features, where, trace, risks, error, impact, tour, ask, overview, agents)
   --yes                explain: go ahead and spend tokens
   --max-modules <n>    explain: explain at most n modules (default 40)
   --max-chars <n>      explain: source characters sent per module (default 120000)
@@ -185,6 +187,16 @@ async function main(argv: string[]): Promise<number> {
       if (kinds?.some((k) => !["file", "symbol", "route", "env"].includes(k))) return fail("--kind for where is file, symbol, route or env (comma-separated).");
       const hits = where(ws.index, text, { limit: num(values.limit) ?? 15, ...(kinds ? { kinds: kinds as Hit["kind"][] } : {}) });
       return print(values.json ? JSON.stringify(hits, null, 2) : formatHits(text, hits));
+    }
+    case "features": {
+      const ws = await open();
+      if (!text) {
+        const list = await listFeatures(ws.index, ws.graph);
+        return print(values.json ? JSON.stringify(list, null, 2) : formatFeatures(list));
+      }
+      const f = await explainFeature(ws.index, ws.graph, text, await ws.risks());
+      if (!f) return fail(`No feature "${text}". Run \`spelunk features\` for the list.`);
+      return print(values.json ? JSON.stringify(f, null, 2) : formatFeature(f));
     }
     case "trace": {
       if (!text) return fail('Say what to trace: a route ("POST /api/login"), a function name, or a file path.');
