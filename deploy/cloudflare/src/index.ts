@@ -6,7 +6,7 @@ interface Env {
 }
 
 /** Settings passed on to the container. Claude keys and git tokens are never passed: visitors bring their own. */
-const PASSED = ["SPELUNK_ALLOWED_HOSTS", "SPELUNK_MAX_REPOS", "SPELUNK_CLONES_PER_HOUR"];
+const PASSED = ["SPELUNK_ALLOWED_HOSTS", "SPELUNK_MAX_REPOS", "SPELUNK_CLONES_PER_HOUR", "SPELUNK_MCP_DOWNLOADS_PER_HOUR"];
 
 /** `spelunk serve`, from the Dockerfile at the repository root. It listens on 8080 and sleeps when idle. */
 export class Spelunk extends Container<Env> {

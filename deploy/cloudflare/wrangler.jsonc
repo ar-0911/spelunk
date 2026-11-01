@@ -17,7 +17,9 @@
     // Downloaded repositories kept on the container's disk; the least recently opened go first.
     "SPELUNK_MAX_REPOS": "30",
     // Downloads one visitor address may start in an hour.
-    "SPELUNK_CLONES_PER_HOUR": "20"
+    "SPELUNK_CLONES_PER_HOUR": "20",
+    // New repositories the /mcp endpoint (claude.ai, Claude Code) may download in an hour, all callers together.
+    "SPELUNK_MCP_DOWNLOADS_PER_HOUR": "60"
   },
   "containers": [
     {

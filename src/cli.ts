@@ -51,6 +51,8 @@ Commands
   serve                Run the dashboard as a public website: visitors paste public repo links and bring
                        their own Claude key (see deploy/README.md)
   mcp                  Run as an MCP server on stdio, for Claude Code and other agents
+  setup claude         Make Claude Code use Spelunk in every project: registers the MCP server
+                       and adds a "use Spelunk before grep" note to ~/.claude/CLAUDE.md (--dry-run)
   facts                For other tools: parse files sent as JSON on stdin, print symbols and calls
   outline              For other tools: split files sent as JSON on stdin into entities and class members
 
@@ -81,7 +83,7 @@ Options
   --space <slug>       publish: the space to publish into (or ELEMNT_SPACE)
   --path <path>        publish: page path in the space (default codebase/<repo name>)
   --draft              publish: save as a draft instead of publishing
-  --dry-run            publish: print the page source instead of sending it
+  --dry-run            publish: print the page source instead of sending it. setup: say, don't do
   --port <n>           ui: port to listen on (default: any free port)
   --no-open            ui: don't open a browser, just print the link
   --allow-any-path     ui: let the folder picker go outside your home folder
@@ -358,11 +360,20 @@ async function main(argv: string[]): Promise<number> {
       const ui = await startUi({
         port: Number(values.port ?? process.env.PORT ?? 8080),
         open: false,
-        hosted: { ...opt("host", values.host), ...opt("allowedHosts", hosts), ...opt("maxRepos", int("SPELUNK_MAX_REPOS")), ...opt("clonesPerHour", int("SPELUNK_CLONES_PER_HOUR")) },
+        hosted: { ...opt("host", values.host), ...opt("allowedHosts", hosts), ...opt("maxRepos", int("SPELUNK_MAX_REPOS")), ...opt("clonesPerHour", int("SPELUNK_CLONES_PER_HOUR")), ...opt("mcpDownloadsPerHour", int("SPELUNK_MCP_DOWNLOADS_PER_HOUR")) },
         log: (m) => process.stderr.write(`${m}\n`),
       });
       process.stdout.write(`Spelunk is serving on ${ui.url}\n`);
       return -1;
+    }
+    case "setup": {
+      if (rest[0] !== "claude") return fail("Usage: spelunk setup claude [--dry-run]");
+      const { setupClaude } = await import("./integrations/claude-setup.js");
+      const r = await setupClaude({ ...(values["dry-run"] ? { dryRun: true } : {}) });
+      const out = [...r.steps];
+      if (r.manual.length) out.unshift("The claude command isn't on your PATH. Install Claude Code, then run:", ...r.manual.map((c) => `  ${c}`), "");
+      if (!values["dry-run"]) out.push("", "Restart Claude Code (or run /mcp in it) to pick it up. Check with: claude mcp list");
+      return print(out.join("\n"));
     }
     case "mcp": {
       const { serve } = await import("./mcp.js");
