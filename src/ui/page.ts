@@ -55,6 +55,7 @@ main { overflow-y: auto; padding: 24px clamp(16px, 3vw, 36px) 80px; min-width: 0
 .lnk { font: 12.5px var(--mono); color: var(--accent-ink); background: none; border: 0; padding: 0; cursor: pointer; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); text-underline-offset: 2px; text-align: left; overflow-wrap: anywhere; }
 .lnk:hover { text-decoration-color: currentColor; }
 .figure { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px; overflow-x: auto; }
+#mapfig.inline-focus { background: none; border: 0; padding: 0; overflow: visible; }
 .figure svg { display: block; width: 100%; height: auto; }
 .figure svg text { font-family: var(--body); }
 .sp-node:hover rect { stroke: var(--accent); }
@@ -363,13 +364,27 @@ function renderTop() {
 
 // ---------- The map: filters, hover to light up links, click to focus one part
 let mapAreas = [], mapSmall = null, mapMode = null;
+// The overview opens focused on one part (the most connected one) instead of drawing every folder at once,
+// which is unreadable past a handful of parts. "Everything" and the area chips switch to the full map.
+let mapShowAll = false, mapFocus = null;
+const focusFirst = () => mapMode === "folders" && !mapShowAll && report.modules.length > 6;
+// The part to open on: one in the middle of the flow (used by several parts and using several), so both sides
+// of the focus view have something in them. A shared library everything imports would leave the right side empty.
+function hubModule() {
+  const ins = new Map(report.modules.map((m) => [m.path, 0]));
+  for (const m of report.modules) for (const d of m.dependsOn) if (ins.has(d.path)) ins.set(d.path, ins.get(d.path) + 1);
+  const score = (m) => [Math.min(ins.get(m.path), m.dependsOn.length), m.dependsOn.length, m.files.length];
+  const big = report.modules.filter((m) => m.files.length >= 3);
+  return (big.length ? big : report.modules).slice().sort((a, b) => { const x = score(a), y = score(b); return y[0] - x[0] || y[1] - x[1] || y[2] - x[2]; })[0].path;
+}
 function mapToolbar() {
   const areas = report.areas || [];
   if (mapSmall === null) mapSmall = report.modules.length > 14;
   if (mapMode === null) mapMode = report.services ? "services" : "folders";
   const modes = report.services ? '<span class="seg"><button class="chip" data-mapmode="services" aria-pressed="' + (mapMode === "services") + '" title="One box per service; arrows are ctx.call and events">Services (' + report.services + ')</button><button class="chip" data-mapmode="folders" aria-pressed="' + (mapMode === "folders") + '" title="One box per folder; arrows are imports">Folders</button></span>' : "";
-  return '<div class="maptools">' + modes + (mapMode === "services" ? '<span class="muted" style="font-size:12.5px">Arrows are broker calls (ctx.call) and events between services.</span>' : "") + (areas.length > 1 && mapMode === "folders" ? '<button class="chip" data-area="" aria-pressed="' + !mapAreas.length + '">Everything</button>' + areas.map((a) => '<button class="chip" data-area="' + esc(a.name) + '" aria-pressed="' + mapAreas.includes(a.name) + '">' + esc(a.name) + ' <span class="muted">' + a.count + "</span></button>").join("") : "") +
-    (mapMode === "folders" ? '<label class="tick" style="margin:0 0 0 auto"><input type="checkbox" id="mapsmall"' + (mapSmall ? " checked" : "") + "> Hide parts with fewer than 3 files</label>" : "") + "</div>";
+  return '<div class="maptools">' + modes + (mapMode === "services" ? '<span class="muted" style="font-size:12.5px">Arrows are broker calls (ctx.call) and events between services.</span>' : "") + (mapMode === "folders" && report.modules.length > 6 ? '<button class="chip" data-mapfocus aria-pressed="' + focusFirst() + '" title="One part and its neighbours">Focused</button>' : "") +
+    (mapMode === "folders" && (areas.length > 1 || report.modules.length > 6) ? '<button class="chip" data-area="" aria-pressed="' + (!focusFirst() && !mapAreas.length) + '">Everything</button>' + (areas.length > 1 ? areas.map((a) => '<button class="chip" data-area="' + esc(a.name) + '" aria-pressed="' + (!focusFirst() && mapAreas.includes(a.name)) + '">' + esc(a.name) + ' <span class="muted">' + a.count + "</span></button>").join("") : "") : "") +
+    (mapMode === "folders" && !focusFirst() ? '<label class="tick" style="margin:0 0 0 auto"><input type="checkbox" id="mapsmall"' + (mapSmall ? " checked" : "") + "> Hide parts with fewer than 3 files</label>" : "") + "</div>";
 }
 async function redrawMap() {
   const fig = $("#mapfig"); if (!fig) return;
@@ -379,6 +394,7 @@ async function redrawMap() {
 }
 function wireMap() {
   const fig = $("#mapfig"); if (!fig) return;
+  if (focusFirst()) return void vFocus(mapFocus || hubModule(), true);
   if (mapAreas.length || mapSmall || mapMode === "services") redrawMap();
   fig.addEventListener("mouseover", (e) => {
     const n = e.target.closest(".sp-node"); const svg = fig.querySelector("svg"); if (!svg) return;
@@ -392,9 +408,12 @@ function wireMap() {
   const sm = $("#mapsmall"); if (sm) sm.addEventListener("change", (e) => { mapSmall = e.target.checked; redrawMap(); });
 }
 let focusLink = null;
-async function vFocus(path) {
-  view = "overview"; renderNav();
-  $("#main").innerHTML = '<div class="view wide empty"><span class="spinner"></span></div>';
+async function vFocus(path, inline = false) {
+  if (inline && !$("#mapfig")) inline = false;
+  if (!inline) {
+    view = "overview"; renderNav();
+    $("#main").innerHTML = '<div class="view wide empty"><span class="spinner"></span></div>';
+  } else mapFocus = path;
   const f = await api("/api/focus?mode=" + (mapMode || "folders") + "&module=" + encodeURIComponent(path));
   focusLink = null;
   const name = (p) => p || "(root)";
@@ -420,9 +439,14 @@ async function vFocus(path) {
   if (!right.length) svg += '<text x="' + (colX[2] + bw / 2) + '" y="' + cy + '" text-anchor="middle" font-size="12" class="sub">It imports nothing else here</text>';
   svg += "</svg>";
   const extra = (list, n) => (list.length > n ? '<p class="muted" style="font-size:12.5px">+ ' + (list.length - n) + " more: " + list.slice(n).map((l) => '<button class="lnk" data-focus="' + esc(l.path) + '">' + esc(name(l.path)) + "</button>").join(", ") + "</p>" : "");
-  $("#main").innerHTML = '<div class="view wide"><button class="lnk" data-view="overview">← All parts</button><h1 class="mono" style="font-size:24px;margin-top:10px">' + esc(name(f.path)) + "</h1>" + (f.about ? '<p class="lede">' + prose(f.about) + "</p>" : "") +
+  const body = '<div class="focusgrid"><div class="figure fx">' + svg + extra(f.usedBy, MAXN) + extra(f.uses, MAXN) + '</div><div class="card fside" id="fside"></div></div>';
+  if (inline) {
+    $("#mapfig").classList.add("inline-focus");
+    $("#mapfig").innerHTML = '<p class="muted" style="font-size:13px;margin:0 0 4px">Focused on <b>' + esc(name(f.path)) + "</b>" + (f.path === hubModule() ? ", a part in the middle of the flow" : "") + ". Left: what uses it. Right: what it uses. Click a box to move the focus there, or an arrow to see the files behind it.</p>" + body;
+    $("#mapcount").textContent = "";
+  } else $("#main").innerHTML = '<div class="view wide"><button class="lnk" data-view="overview">← All parts</button><h1 class="mono" style="font-size:24px;margin-top:10px">' + esc(name(f.path)) + "</h1>" + (f.about ? '<p class="lede">' + prose(f.about) + "</p>" : "") +
     '<p class="muted" style="font-size:13px">'+(mapMode === "services" ? "Only this service and the services it talks to. Thicker arrows mean more calls." : "Only this part and its neighbours. Thicker arrows mean more files import across that link.")+'  Click a box to move the focus there, or an arrow to see the files behind it.</p>' +
-    '<div class="focusgrid"><div class="figure fx">' + svg + extra(f.usedBy, MAXN) + extra(f.uses, MAXN) + '</div><div class="card fside" id="fside"></div></div></div>';
+    body + "</div>";
   const side = () => {
     let h = "";
     if (focusLink) {
@@ -441,10 +465,10 @@ async function vFocus(path) {
   };
   side();
   $(".fx svg").addEventListener("click", (e) => {
-    const n = e.target.closest(".fx-node"); if (n) return vFocus(n.dataset.focus);
+    const n = e.target.closest(".fx-node"); if (n) return vFocus(n.dataset.focus, inline);
     const ed = e.target.closest(".fx-edge"); if (ed) { focusLink = ed.dataset.link; side(); }
   });
-  $(".fx svg").addEventListener("keydown", (e) => { const n = e.target.closest(".fx-node"); if (n && e.key === "Enter") vFocus(n.dataset.focus); });
+  $(".fx svg").addEventListener("keydown", (e) => { const n = e.target.closest(".fx-node"); if (n && e.key === "Enter") vFocus(n.dataset.focus, inline); });
 }
 // "schema.ts, imported by accounts.ts, ask.ts, …": one line per imported file reads faster than one per pair.
 function groupPairs(files) {
@@ -471,7 +495,8 @@ function vOverview() {
     '<div class="card"><h4>Where the program starts</h4>' + (r.entries.length ? r.entries.map((e) => "<div>" + loc(e.path) + ' <span class="tag">' + esc(e.label) + "</span></div>").join("") : '<p class="muted">No entry point found.</p>') + "</div>" +
     '<div class="card"><h4>Read these first</h4><p class="muted" style="font-size:12.5px">Big files that change often. Most bugs live here.</p>' + (hot.length ? hot.map((x) => "<div>" + loc(x.locations[0].path) + "</div>").join("") : '<p class="muted">No git history to rank by.</p>') + "</div>" +
     '<div class="card"><h4>How to run it</h4>' + (o && o.runLocally.length ? '<ol class="steps" style="margin:0;font-size:13px">' + o.runLocally.map((s) => "<li>" + prose(s) + "</li>").join("") + "</ol>" : cmds.length ? cmds.map((c) => '<div style="margin-bottom:6px"><code>' + esc(c.name) + '</code><div class="muted mono" style="font-size:11.5px;overflow-wrap:anywhere">' + esc(c.command.slice(0, 70)) + "</div></div>").join("") : '<p class="muted">No commands found.</p>') + "</div></div>";
-  h += '<h2>How the parts connect</h2><p class="muted">Each box is a folder of code; arrows point to the folders it uses, thicker when more files do. Point at a box to light up its links, click it to see just that part and its neighbours.</p>' + mapToolbar() + '<div class="figure" id="mapfig">' + r.diagram + '</div><p class="muted" id="mapcount" style="font-size:12.5px;margin-top:6px"></p>';
+  const tools = mapToolbar(); // decides the map's mode, which the sentence below depends on
+  h += '<h2>How the parts connect</h2><p class="muted">' + (focusFirst() ? "Each box is a folder of code, shown one part at a time with its neighbours; thicker arrows mean more files import across that link. Everything shows the whole map." : "Each box is a folder of code; arrows point to the folders it uses, thicker when more files do. Point at a box to light up its links, click it to see just that part and its neighbours.") + "</p>" + tools + '<div class="figure" id="mapfig">' + r.diagram + '</div><p class="muted" id="mapcount" style="font-size:12.5px;margin-top:6px"></p>';
   h += '<h2>The parts</h2><div class="cards">' + r.modules.map((m) => {
     const e = m.explanation, doc = e ? e.summary : (m.files.find((f) => f.doc) || {}).doc;
     return '<button class="card click" data-module="' + esc(m.path) + '"><h4 class="mono" style="font-size:13px">' + esc(m.path || "(root)") + '</h4><p class="muted" style="font-size:12.5px;margin-bottom:6px">' + m.files.length + " files · " + fmt(m.lines) + " lines</p>" + (doc ? '<p style="font-size:13px;margin:0">' + prose(doc.length > 220 ? doc.slice(0, 220) + "…" : doc) + "</p>" : "") + "</button>";
@@ -479,6 +504,13 @@ function vOverview() {
   if (o && o.glossary.length) h += '<h2>Words this project uses</h2><div class="tw"><table>' + o.glossary.map((g) => "<tr><td><b>" + esc(g.term) + "</b></td><td>" + prose(g.meaning) + "</td></tr>").join("") + "</table></div>";
   $("#main").innerHTML = h + "</div>";
   wireMap();
+}
+
+/** Redraws the overview where the reader is, so switching the map's mode doesn't jump to the top. */
+function vOverviewKeepScroll() {
+  const y = window.scrollY;
+  vOverview();
+  window.scrollTo(0, y);
 }
 
 function vModule(path) {
@@ -1119,13 +1151,15 @@ document.addEventListener("click", async (e) => {
   if (!t) return;
   const d = t.dataset;
   try {
-    if (t.matches("a[href^='#mod-']")) { e.preventDefault(); vFocus(decodeURIComponent(t.getAttribute("href").slice(5)).replace(/^root$/, "")); return; }
+    if (t.matches("a[href^='#mod-']")) { e.preventDefault(); const p = decodeURIComponent(t.getAttribute("href").slice(5)).replace(/^root$/, ""); if (t.closest("#mapfig")) { mapShowAll = false; mapFocus = p; return vOverviewKeepScroll(); } vFocus(p); return; }
     if (d.frame !== undefined) { tstack.push({ path: d.frame, line: Number(d.fline) || 1, label: d.flabel }); showHelpers = false; showOther = false; return loadFrame(tstack[tstack.length - 1]); }
     if (d.into !== undefined) return stepInto(d.into, Number(d.iline), d.ilabel);
     if (d.crumb !== undefined) return d.crumb === "back" ? stepBack() : stepBack(Number(d.crumb));
+    if (d.mapfocus !== undefined) { mapShowAll = false; return vOverviewKeepScroll(); }
+    if (d.area !== undefined && focusFirst()) { mapShowAll = true; mapAreas = d.area ? [d.area] : []; return vOverviewKeepScroll(); }
     if (d.area !== undefined) { mapAreas = d.area ? (mapAreas.includes(d.area) ? mapAreas.filter((x) => x !== d.area) : mapAreas.concat(d.area)) : []; document.querySelectorAll("[data-area]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.area ? mapAreas.includes(b.dataset.area) : !mapAreas.length))); return redrawMap(); }
-    if (d.focus !== undefined) return vFocus(d.focus);
-    if (d.mapmode) { mapMode = d.mapmode; return vOverview(); }
+    if (d.focus !== undefined) return vFocus(d.focus, Boolean(t.closest("#mapfig")));
+    if (d.mapmode) { mapMode = d.mapmode; return vOverviewKeepScroll(); }
     if (t.id === "dback") return drawerBack();
     if (d.readas !== undefined) { closeFile(); tstack = []; return stepInto(d.readas, Number(d.line), ""); }
     if (d.open !== undefined) return openFile(d.open, Number(d.line) || 0);
