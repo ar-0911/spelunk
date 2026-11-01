@@ -155,6 +155,8 @@ function docAbove(node: Node): string | undefined {
   while (isComment(prev) && prev.endPosition.row >= line - 1) {
     parts.unshift(cleanComment(prev.text));
     line = prev.startPosition.row;
+    // A doc block (`/** … */`) is complete on its own: one stacked above it belongs to something else, often an orphan from a moved function.
+    if (prev.text.startsWith("/**")) break;
     prev = prev.previousSibling;
   }
   return parts.length ? firstParagraph(parts.join("\n")) : undefined;

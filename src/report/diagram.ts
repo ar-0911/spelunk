@@ -33,9 +33,16 @@ export function moduleLayers(mods: Report["modules"]): string[][] {
 const short = (p: string) => (p ? (p.length > 30 ? `…${p.slice(-29)}` : p) : "(root)");
 
 /** `agents`: module path → names of the Braid agents changing it, drawn as a badge on the box. */
-export function diagramSvg(mods: Report["modules"], agents?: Map<string, string[]>): string {
-  if (!mods.length) return "";
-  const layers = moduleLayers(mods);
+export function diagramSvg(all: Report["modules"], agents?: Map<string, string[]>): string {
+  if (!all.length) return "";
+  // Parts with no links to the others go in their own row at the bottom, so they don't read as foundations.
+  const shown = new Set(all.map((m) => m.path));
+  const linked = new Set<string>();
+  for (const m of all) for (const d of m.dependsOn) if (shown.has(d.path) && d.path !== m.path) linked.add(m.path).add(d.path);
+  const mods = linked.size ? all.filter((m) => linked.has(m.path)) : all;
+  const loose = linked.size ? all.filter((m) => !linked.has(m.path)).map((m) => m.path) : [];
+  const layers = [...moduleLayers(mods), ...(loose.length ? [loose.sort()] : [])];
+  const looseTop = { y: 0 };
   const W = 1000;
   const boxW = 190;
   const boxH = 46;
@@ -44,7 +51,11 @@ export function diagramSvg(mods: Report["modules"], agents?: Map<string, string[
   const perRow = Math.floor((W + gapX) / (boxW + gapX));
   const pos = new Map<string, { x: number; y: number }>();
   let y = 10;
-  for (const layer of layers) {
+  for (const [li, layer] of layers.entries()) {
+    if (loose.length && li === layers.length - 1) {
+      y += 18;
+      looseTop.y = y - 14;
+    }
     for (let i = 0; i < layer.length; i += perRow) {
       const chunk = layer.slice(i, i + perRow);
       const total = chunk.length * boxW + (chunk.length - 1) * gapX;
@@ -57,8 +68,8 @@ export function diagramSvg(mods: Report["modules"], agents?: Map<string, string[
     }
   }
   const H = y - rowGap + 20;
-  const lines = new Map(mods.map((m) => [m.path, m.lines]));
-  const maxLines = Math.max(...mods.map((m) => m.lines), 1);
+  const lines = new Map(all.map((m) => [m.path, m.lines]));
+  const maxLines = Math.max(...all.map((m) => m.lines), 1);
   const edges: string[] = [];
   for (const m of mods) {
     const a = pos.get(m.path)!;
@@ -73,11 +84,12 @@ export function diagramSvg(mods: Report["modules"], agents?: Map<string, string[
       const path = up
         ? `M${x1},${a.y} C${x1},${a.y - 40} ${x2},${y2 + boxH + 40} ${x2},${y2 + boxH}`
         : `M${x1},${y1} C${x1},${y1 + rowGap / 2} ${x2},${y2 - rowGap / 2} ${x2},${y2}`;
-      const w = Math.min(3, 0.8 + Math.log2(1 + d.weight) * 0.6);
-      edges.push(`<path d="${path}" fill="none" stroke="var(--edge)" stroke-width="${w.toFixed(1)}" marker-end="url(#sp-arrow)"${up ? ' stroke-dasharray="4 3"' : ""}><title>${esc(m.path || "(root)")} → ${esc(d.path || "(root)")}: ${d.weight} import${d.weight === 1 ? "" : "s"}</title></path>`);
+      // Thicker means more files import across this link, so the links that matter stand out.
+      const w = Math.min(5, 0.8 + Math.log2(1 + d.weight) * 0.9);
+      edges.push(`<path class="sp-edge" data-from="${esc(m.path)}" data-to="${esc(d.path)}" d="${path}" fill="none" stroke="var(--edge)" stroke-width="${w.toFixed(1)}" marker-end="url(#sp-arrow)"${up ? ' stroke-dasharray="4 3"' : ""}><title>${esc(m.path || "(root)")} → ${esc(d.path || "(root)")}: ${d.weight} import${d.weight === 1 ? "" : "s"}${up ? " (points back up: part of a cycle)" : ""}</title></path>`);
     }
   }
-  const boxes = mods.map((m) => {
+  const boxes = all.map((m) => {
     const p = pos.get(m.path)!;
     const fill = Math.round(8 + (lines.get(m.path)! / maxLines) * 30);
     const who = agents?.get(m.path) ?? [];
@@ -86,9 +98,11 @@ export function diagramSvg(mods: Report["modules"], agents?: Map<string, string[
       : "";
     const stroke = who.length ? `stroke="${who.length > 1 ? "var(--warn, #b7791f)" : "var(--accent)"}" stroke-width="2"` : 'stroke="var(--line-strong)"';
     const tip = who.length ? `${m.path || "(root)"}: changed by ${who.join(", ")}` : m.path || "(root)";
-    return `<a href="#mod-${encodeURIComponent(m.path || "root")}"><g class="sp-node"><rect x="${p.x}" y="${p.y}" width="${boxW}" height="${boxH}" rx="7" fill="color-mix(in srgb, var(--accent) ${fill}%, var(--panel))" ${stroke}/><text x="${p.x + 10}" y="${p.y + 19}" font-size="12.5" font-weight="600" fill="var(--ink)">${esc(short(m.path))}</text><text x="${p.x + 10}" y="${p.y + 36}" font-size="11" fill="var(--muted)">${m.files.length} files · ${m.lines.toLocaleString("en")} lines</text>${badge}<title>${esc(tip)}</title></g></a>`;
+    return `<a href="#mod-${encodeURIComponent(m.path || "root")}"><g class="sp-node" data-mod="${esc(m.path)}"><rect x="${p.x}" y="${p.y}" width="${boxW}" height="${boxH}" rx="7" fill="color-mix(in srgb, var(--accent) ${fill}%, var(--panel))" ${stroke}/><text x="${p.x + 10}" y="${p.y + 19}" font-size="12.5" font-weight="600" fill="var(--ink)">${esc(short(m.path))}</text><text x="${p.x + 10}" y="${p.y + 36}" font-size="11" fill="var(--muted)">${m.files.length} files · ${m.lines.toLocaleString("en")} lines</text>${badge}<title>${esc(tip)}</title></g></a>`;
   });
-  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Module dependency diagram" style="min-width:720px"><defs><marker id="sp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--edge)"/></marker></defs>${edges.join("")}${boxes.join("")}</svg>`;
+  const looseLabel = loose.length ? `<text x="${W / 2}" y="${looseTop.y}" font-size="11" text-anchor="middle" fill="var(--muted)">Not linked to the other parts</text>` : "";
+  // markerUnits="userSpaceOnUse" keeps arrowheads one size however thick the line is.
+  return `<svg viewBox="0 0 ${W} ${H}" role="img" aria-label="Module dependency diagram" style="min-width:720px"><defs><marker id="sp-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerUnits="userSpaceOnUse" markerWidth="9" markerHeight="9" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--edge)"/></marker></defs>${looseLabel}${edges.join("")}${boxes.join("")}</svg>`;
 }
 
 /** The same graph as Mermaid, for Markdown reports (GitHub renders it). */
